@@ -1,0 +1,45 @@
+name: linktest
+on:
+  push:
+    branches: [ios]
+jobs:
+  linktest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install Theos
+        uses: Randomblock1/theos-action@v1
+      - name: Get SDKs and C++ headers
+        run: |
+          git clone --depth=1 https://github.com/theos/sdks
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libc++-18-dev libc++abi-18-dev
+      - name: Compile test program
+        run: |
+          cat > hello.cpp <<'EOF'
+          #include <iostream>
+          #include <string>
+          #include <vector>
+          int main() {
+              std::vector<std::string> v = {"hello", "ios8"};
+              for (auto &s : v) std::cout << s << std::endl;
+              return 0;
+          }
+          EOF
+          clang++ --target=armv7-apple-ios8.0 -isysroot $PWD/sdks/iPhoneOS9.3.sdk -nostdinc++ -isystem /usr/lib/llvm-18/include/c++/v1 -std=c++11 -c hello.cpp -o hello.o
+          file hello.o
+      - name: LINKTEST different SDKs
+        run: |
+          LD=$GITHUB_WORKSPACE/theos/toolchain/linux/iphone/bin/ld
+          for V in 10.3 9.3; do
+            SDK=$PWD/sdks/iPhoneOS$V.sdk
+            echo "=== SDK $V"
+            ls $SDK/usr/lib/system | grep -i launch
+            $LD -arch armv7 -ios_version_min 8.0 -syslibroot $SDK hello.o -lc++ -lSystem -o hello_$V 2>&1 | grep -v "built for iOS Simulator" | head -8
+            file hello_$V
+          done
+          echo "=== SDK 9.3 with dummy liblaunch"
+          SDK=$PWD/sdks/iPhoneOS9.3.sdk
+          cp $SDK/usr/lib/system/libdyld.tbd $SDK/usr/lib/system/liblaunch.tbd
+          sed -i 's/libdyld/liblaunch/g' $SDK/usr/lib/system/liblaunch.tbd
+          $LD -arch armv7 -ios_version_min 8.0 -syslibroot $SDK hello.o -lc++ -lSystem -o hello_stub 2>&1 | grep -v "built for iOS Simulator" | head -8
+          file hello_stub
