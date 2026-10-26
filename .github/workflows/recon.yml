@@ -6,12 +6,13 @@ jobs:
   recon:
     runs-on: ubuntu-latest
     steps:
-      - name: Get iOS 9.3 SDK
+      - name: Get iOS 9.3 SDK and C++ headers
         run: |
           git clone --depth=1 https://github.com/theos/sdks
-          ls sdks/iPhoneOS9.3.sdk/usr/include/c++/v1 | head -5
-          ls sdks/iPhoneOS9.3.sdk/usr/lib | grep -i "c++\|libSystem" | head
-      - name: Compile tiny test program for armv7 iOS 8
+          sudo apt-get update
+          sudo apt-get install -y libc++-18-dev libc++abi-18-dev
+          ls /usr/lib/llvm-18/include/c++/v1 | head -5
+      - name: Compile test program
         run: |
           cat > hello.cpp <<'EOF'
           #include <iostream>
@@ -24,9 +25,13 @@ jobs:
           }
           EOF
           SDK=$PWD/sdks/iPhoneOS9.3.sdk
-          clang++ --target=armv7-apple-ios8.0 -isysroot $SDK -stdlib=libc++ -std=c++11 -fuse-ld=/usr/bin/ld64.lld-18 hello.cpp -o hello
+          clang++ --target=armv7-apple-ios8.0 -isysroot $SDK -nostdinc++ -isystem /usr/lib/llvm-18/include/c++/v1 -std=c++11 -c hello.cpp -o hello.o
+          file hello.o
+      - name: Link test program
+        run: |
+          SDK=$PWD/sdks/iPhoneOS9.3.sdk
+          clang++ --target=armv7-apple-ios8.0 -isysroot $SDK -nostdlib++ -fuse-ld=/usr/bin/ld64.lld-18 hello.o -lc++ -o hello
           file hello
       - name: Check minimum iOS version
         run: |
-          ls /usr/lib/llvm-18/bin | grep -i "objdump" || true
           /usr/lib/llvm-18/bin/llvm-objdump -p hello | grep -i -A4 "VERSION_MIN\|BUILD_VERSION" || true
