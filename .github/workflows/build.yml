@@ -121,7 +121,7 @@ jobs:
             -DSDL_SHARED=OFF \
             -DSDL_STATIC=ON
 
-          make -j$(nproc) || true
+          make -j$(nproc)
 
       - name: Upload Build Artifacts
         uses: actions/upload-artifact@v4
