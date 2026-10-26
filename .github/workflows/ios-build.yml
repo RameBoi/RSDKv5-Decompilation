@@ -21,10 +21,8 @@ jobs:
           rm -rf Game/dependencies/RSDKv5
           mkdir -p Game/dependencies/RSDKv5
           tar --exclude=./Game --exclude=./.git --exclude=./sdks --exclude=./theos -cf - . | tar -xf - -C Game/dependencies/RSDKv5
-          ls Game/dependencies/RSDKv5/platforms
-      - name: IOSBUILD configure v2
+      - name: IOSBUILD configure v3
         run: |
-          echo "=== llvm tools available"; ls /usr/lib/llvm-18/bin | grep -E "libtool|ranlib|^llvm-ar|otool|llvm-nm|strip"
           LB=/usr/lib/llvm-18/bin
           SDK=$PWD/sdks/iPhoneOS10.3.sdk
           CF="--target=armv7s-apple-ios8.0 -isysroot $SDK -w"
@@ -36,15 +34,23 @@ jobs:
             -DCMAKE_OBJC_COMPILER=clang -DCMAKE_OBJCXX_COMPILER=clang++ \
             -DCMAKE_INSTALL_NAME_TOOL=/bin/true \
             -DCMAKE_AR=$LB/llvm-ar -DCMAKE_RANLIB=$LB/llvm-ranlib \
-            -DCMAKE_LIBTOOL=$LB/llvm-libtool-darwin \
-            -DCMAKE_NM=$LB/llvm-nm -DCMAKE_OTOOL=$LB/llvm-otool \
-            -DCMAKE_STRIP=$LB/llvm-strip -DCMAKE_OBJDUMP=$LB/llvm-objdump \
+            -DCMAKE_NM=$LB/llvm-nm -DCMAKE_STRIP=$LB/llvm-strip -DCMAKE_OBJDUMP=$LB/llvm-objdump \
             -DCMAKE_C_FLAGS="$CF" -DCMAKE_CXX_FLAGS="$CF $CXXF" \
             -DCMAKE_OBJC_FLAGS="$CF" -DCMAKE_OBJCXX_FLAGS="$CF $CXXF" \
             -DCMAKE_EXE_LINKER_FLAGS="--target=armv7s-apple-ios8.0 -isysroot $SDK -fuse-ld=$GITHUB_WORKSPACE/theos/toolchain/linux/iphone/bin/ld -nostdlib" \
-            -DPLATFORM=iOS -DGAME_STATIC=ON -DRETRO_MOD_LOADER=OFF -DWITH_RSDK=ON 2>&1 | tail -40
-      - name: IOSBUILD compile and link
+            -DPLATFORM=iOS -DGAME_STATIC=ON -DRETRO_MOD_LOADER=OFF -DWITH_RSDK=ON > configure.log 2>&1 || (tail -30 configure.log; exit 1)
+          tail -4 configure.log
+      - name: IOSBUILD patch SDL flags
+        run: |
+          echo "=== where -std=gnu++17 shows up"; grep -rl "gnu++17" build --include=flags.make | head
+          grep -rl "^OBJC_FLAGS" build --include=flags.make | xargs sed -i '/^OBJC_FLAGS/ s/-std=gnu++17//'
+          echo "=== after patch"; grep -rn "^OBJC_FLAGS" build --include=flags.make | head -3 | cut -c1-300
+      - name: IOSBUILD compile v3
         run: |
           cmake --build build -j4 -- -k > build.log 2>&1 || echo "BUILD FAILED"
-          echo "=== errors"; grep -E "error:|Undefined symbols|ld: |CMake Error" build.log | sort -u | head -60
-          echo "=== tail"; tail -15 build.log
+          echo "=== first 12 errors, in order"; grep -E "error:" build.log | head -12 | cut -c1-260
+          echo "=== first Game.c error with context"; grep -m1 -B2 -A14 "SonicMania/Game.c:" build.log | cut -c1-260
+          echo "=== which files failed, count by folder"; grep -E "error:" build.log | sed -E 's#^(/[^:]*)/[^/:]*:.*#\1#' | sed 's#.*/RSDKv5-Decompilation/##' | sort | uniq -c | sort -rn | head -12
+          echo "=== GameAPI location"; find . -path ./sdks -prune -o \( -name "GameAPI.h" -o -name "GameAPI" \) -print | head
+          echo "=== Game.h top"; head -30 Game/SonicMania/Game.h
+          echo "=== tail"; tail -6 build.log
