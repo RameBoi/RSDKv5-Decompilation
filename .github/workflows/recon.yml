@@ -9,19 +9,13 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
-      - name: Layout
+      - name: Build files
         run: |
-          ls
-          echo "--- platforms"; ls platforms
-          echo "--- gitmodules"; cat .gitmodules
-          echo "--- ios/apple in CMakeLists"; grep -n -i "ios\|apple" CMakeLists.txt | head -40
-      - name: Problem spots
+          echo "=== CMakeLists.txt"; cat CMakeLists.txt
+          echo "=== platforms/Linux.cmake"; cat platforms/Linux.cmake
+      - name: iOS clues
         run: |
-          echo "--- filesystem"; grep -rn "filesystem" RSDKv5 dependencies Game --include=*.cpp --include=*.hpp --include=*.h | head -40
-          echo "--- thread_local"; grep -rn "thread_local" RSDKv5 dependencies Game | head -20
-      - name: SDKs and tools
-        run: |
-          git clone --depth=1 https://github.com/theos/sdks
-          ls sdks
-          clang --version
-          ls /usr/bin | grep -i lld || true
+          echo "=== app glue files"; find . \( -path ./dependencies -o -path ./Game \) -prune -o \( -name "*.m" -o -name "*.mm" -o -name Info.plist \) -print | head -30
+          echo "=== RETRO_IOS"; grep -rn "RETRO_IOS" RSDKv5 | head -60
+          echo "=== render devices"; grep -n "RETRO_RENDERDEVICE" RSDKv5/RSDK/Core/RetroEngine.hpp | head -40
+          echo "=== xcode settings"; grep -n "IPHONEOS_DEPLOYMENT_TARGET\|GCC_PREPROCESSOR_DEFINITIONS\|RETRO_\|ARCHS\|CLANG_CXX_LANGUAGE_STANDARD" RSDKv5.xcodeproj/project.pbxproj | head -60
