@@ -24,18 +24,16 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq libc++-18-dev libc++abi-18-dev cmake ninja-build dpkg zip
 
-      - name: Create Compatibility Stubs & iOS CMake Platform File
+      - name: Create Stubs & iOS CMake Platform Script
         run: |
           mkdir -p stubs
           
-          # Header stub for AvailabilityVersions.h missing in iOS 10.3 SDK
           cat > stubs/AvailabilityVersions.h <<'EOF'
           #ifndef _AVAILABILITY_VERSIONS_H_
           #define _AVAILABILITY_VERSIONS_H_
           #endif
           EOF
 
-          # Objective-C category stub for iOS 11+ UIViewController methods missing in iOS 10.3 SDK
           cat > stubs/iOS11_Stubs.h <<'EOF'
           #ifndef IOS11_STUBS_H
           #define IOS11_STUBS_H
@@ -75,51 +73,56 @@ jobs:
           set(RETRO_SUBSYSTEM "SDL2" CACHE STRING "Subsystem" FORCE)
 
           if(EXISTS "${CMAKE_SOURCE_DIR}/RSDKv5/main.cpp")
-              set(RSDK_DIR "RSDKv5")
-          elseif(EXISTS "${CMAKE_SOURCE_DIR}/dependencies/RSDKv5/main.cpp")
-              set(RSDK_DIR "dependencies/RSDKv5")
+              set(RSDK_DIR "${CMAKE_SOURCE_DIR}/RSDKv5")
+          elseif(EXISTS "${CMAKE_SOURCE_DIR}/Game/dependencies/RSDKv5/main.cpp")
+              set(RSDK_DIR "${CMAKE_SOURCE_DIR}/Game/dependencies/RSDKv5")
           else()
-              set(RSDK_DIR "RSDKv5")
+              set(RSDK_DIR "${CMAKE_SOURCE_DIR}/RSDKv5")
           endif()
 
-          set(RETRO_FILES
-              "${RSDK_DIR}/main.cpp"
-              "${RSDK_DIR}/RSDK/Core/RetroEngine.cpp"
-              "${RSDK_DIR}/RSDK/Core/Math.cpp"
-              "${RSDK_DIR}/RSDK/Core/Reader.cpp"
-              "${RSDK_DIR}/RSDK/Core/Link.cpp"
-              "${RSDK_DIR}/RSDK/Core/ModAPI.cpp"
-              "${RSDK_DIR}/RSDK/Dev/Debug.cpp"
-              "${RSDK_DIR}/RSDK/Storage/Storage.cpp"
-              "${RSDK_DIR}/RSDK/Storage/Text.cpp"
-              "${RSDK_DIR}/RSDK/Graphics/Drawing.cpp"
-              "${RSDK_DIR}/RSDK/Graphics/Scene3D.cpp"
-              "${RSDK_DIR}/RSDK/Graphics/Animation.cpp"
-              "${RSDK_DIR}/RSDK/Graphics/Sprite.cpp"
-              "${RSDK_DIR}/RSDK/Graphics/Palette.cpp"
-              "${RSDK_DIR}/RSDK/Graphics/Video.cpp"
-              "${RSDK_DIR}/RSDK/Audio/Audio.cpp"
-              "${RSDK_DIR}/RSDK/Input/Input.cpp"
-              "${RSDK_DIR}/RSDK/Scene/Scene.cpp"
-              "${RSDK_DIR}/RSDK/Scene/Collision.cpp"
-              "${RSDK_DIR}/RSDK/Scene/Object.cpp"
-              "${RSDK_DIR}/RSDK/Scene/Objects/DefaultObject.cpp"
-              "${RSDK_DIR}/RSDK/Scene/Objects/DevOutput.cpp"
-              "${RSDK_DIR}/RSDK/User/Core/UserAchievements.cpp"
-              "${RSDK_DIR}/RSDK/User/Core/UserCore.cpp"
-              "${RSDK_DIR}/RSDK/User/Core/UserLeaderboards.cpp"
-              "${RSDK_DIR}/RSDK/User/Core/UserPresence.cpp"
-              "${RSDK_DIR}/RSDK/User/Core/UserStats.cpp"
-              "${RSDK_DIR}/RSDK/User/Core/UserStorage.cpp"
-              "${RSDK_DIR}/RSDK/Graphics/SDL2/SDL2RenderDevice.cpp"
-              "${RSDK_DIR}/RSDK/Audio/SDL2/SDL2AudioDevice.cpp"
-              "${RSDK_DIR}/RSDK/Input/SDL2/SDL2InputDevice.cpp"
-              "${RSDK_DIR}/RSDK/User/Dummy/UserDummy.cpp"
-              "dependencies/all/tinyxml2/tinyxml2.cpp"
-              "dependencies/all/iniparser/iniparser.cpp"
-              "dependencies/all/iniparser/dictionary.cpp"
-              "${CMAKE_SOURCE_DIR}/stubs.cpp"
+          file(GLOB_RECURSE ALL_ENGINE_SOURCES 
+              "${RSDK_DIR}/*.cpp" 
+              "${RSDK_DIR}/*.c" 
+              "${RSDK_DIR}/*.mm"
           )
+          file(GLOB_RECURSE ALL_DEP_SOURCES
+              "${CMAKE_SOURCE_DIR}/dependencies/all/*.cpp" 
+              "${CMAKE_SOURCE_DIR}/dependencies/all/*.c"
+          )
+
+          set(RETRO_FILES "")
+          foreach(src IN LISTS ALL_ENGINE_SOURCES ALL_DEP_SOURCES)
+              if(NOT src MATCHES "/NX/" AND 
+                 NOT src MATCHES "/MiniAudio/" AND 
+                 NOT src MATCHES "/PortAudio/" AND 
+                 NOT src MATCHES "/Oboe/" AND 
+                 NOT src MATCHES "/WASAPI/" AND 
+                 NOT src MATCHES "/XAudio/" AND 
+                 NOT src MATCHES "/FAudio/" AND 
+                 NOT src MATCHES "/DSound/" AND 
+                 NOT src MATCHES "/ALSA/" AND 
+                 NOT src MATCHES "/PulseAudio/" AND 
+                 NOT src MATCHES "/DX11/" AND 
+                 NOT src MATCHES "/DX9/" AND 
+                 NOT src MATCHES "/D3D11/" AND 
+                 NOT src MATCHES "/OpenGL3/" AND 
+                 NOT src MATCHES "/GL3/" AND 
+                 NOT src MATCHES "/GLFW/" AND 
+                 NOT src MATCHES "/SDL1/" AND 
+                 NOT src MATCHES "/Vulkan/" AND 
+                 NOT src MATCHES "/DInput/" AND 
+                 NOT src MATCHES "/XInput/" AND 
+                 NOT src MATCHES "/RawInput/" AND 
+                 NOT src MATCHES "/WinInput/" AND 
+                 NOT src MATCHES "/Steam/" AND 
+                 NOT src MATCHES "/EOS/" AND 
+                 NOT src MATCHES "/Origin/" AND 
+                 NOT src MATCHES "/Legacy/")
+                  list(APPEND RETRO_FILES "${src}")
+              endif()
+          endforeach()
+
+          list(APPEND RETRO_FILES "${CMAKE_SOURCE_DIR}/stubs.cpp")
 
           add_subdirectory(dependencies/ios/SDL EXCLUDE_FROM_ALL)
 
@@ -136,7 +139,10 @@ jobs:
           find_library(GAMECONTROLLER_LIB GameController)
           find_library(COREGRAPHICS_LIB CoreGraphics)
 
-          file(GLOB_RECURSE GAME_SOURCES "Game/SonicMania/*.cpp" "Game/SonicMania/*.c")
+          file(GLOB_RECURSE GAME_SOURCES 
+              "${CMAKE_SOURCE_DIR}/Game/SonicMania/*.cpp" 
+              "${CMAKE_SOURCE_DIR}/Game/SonicMania/*.c"
+          )
 
           add_executable(RetroEngine ${RETRO_FILES} ${GAME_SOURCES})
 
@@ -150,15 +156,15 @@ jobs:
           target_include_directories(RetroEngine PRIVATE
               ${RSDK_DIR}
               ${RSDK_DIR}/RSDK
-              Game/SonicMania
-              dependencies/ios/SDL/include
-              dependencies/all
-              dependencies/all/tinyxml2
-              dependencies/all/iniparser
-              dependencies/all/stb_vorbis
-              dependencies/ios/ogg/include
-              dependencies/ios/vorbis/include
-              dependencies/ios/theora/include
+              ${CMAKE_SOURCE_DIR}/Game/SonicMania
+              ${CMAKE_SOURCE_DIR}/dependencies/ios/SDL/include
+              ${CMAKE_SOURCE_DIR}/dependencies/all
+              ${CMAKE_SOURCE_DIR}/dependencies/all/tinyxml2
+              ${CMAKE_SOURCE_DIR}/dependencies/all/iniparser
+              ${CMAKE_SOURCE_DIR}/dependencies/all/stb_vorbis
+              ${CMAKE_SOURCE_DIR}/dependencies/ios/ogg/include
+              ${CMAKE_SOURCE_DIR}/dependencies/ios/vorbis/include
+              ${CMAKE_SOURCE_DIR}/dependencies/ios/theora/include
           )
 
           target_link_libraries(RetroEngine PRIVATE
@@ -204,13 +210,11 @@ jobs:
 
       - name: Assemble App Bundle, IPA & DEB Packages
         run: |
-          # 1. Construct .app bundle
           APP_DIR="build/RSDKv5U.app"
           mkdir -p "$APP_DIR"
           cp build/RetroEngine "$APP_DIR/RSDKv5U"
           chmod +x "$APP_DIR/RSDKv5U"
 
-          # 2. Generate Info.plist for iOS 8.4.1 armv7
           cat > "$APP_DIR/Info.plist" <<'EOF'
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -254,12 +258,10 @@ jobs:
           </plist>
           EOF
 
-          # 3. Create .ipa package
           mkdir -p build/Payload
           cp -r "$APP_DIR" build/Payload/
           cd build && zip -r SonicMania_iOS8.ipa Payload && cd ..
 
-          # 4. Create .deb package
           mkdir -p deb_pkg/DEBIAN deb_pkg/Applications
           cp -r "$APP_DIR" deb_pkg/Applications/
           
