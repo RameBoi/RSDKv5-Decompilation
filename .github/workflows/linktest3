@@ -1,0 +1,38 @@
+name: linktest3
+on:
+  push:
+    branches: [ios]
+jobs:
+  linktest3:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install Theos
+        uses: Randomblock1/theos-action@v1
+      - name: Get SDKs and C++ headers
+        run: |
+          git clone --depth=1 https://github.com/theos/sdks
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libc++-18-dev libc++abi-18-dev
+      - name: Compile test program
+        run: |
+          cat > hello.cpp <<'EOF'
+          #include <iostream>
+          #include <string>
+          #include <vector>
+          int main() {
+              std::vector<std::string> v = {"hello", "ios8"};
+              for (auto &s : v) std::cout << s << std::endl;
+              return 0;
+          }
+          EOF
+          clang++ --target=armv7-apple-ios8.0 -isysroot $PWD/sdks/iPhoneOS10.3.sdk -nostdinc++ -isystem /usr/lib/llvm-18/include/c++/v1 -std=c++11 -c hello.cpp -o hello.o
+          file hello.o
+      - name: LINKTEST3 with libc++abi
+        run: |
+          LD=$GITHUB_WORKSPACE/theos/toolchain/linux/iphone/bin/ld
+          SDK=$PWD/sdks/iPhoneOS10.3.sdk
+          echo "=== personality symbol in SDK libs"
+          grep -l "gxx_personality_sj0" $SDK/usr/lib/*.tbd || echo "not found in any usr/lib tbd"
+          echo "=== link"
+          $LD -arch armv7 -ios_version_min 8.0 -syslibroot $SDK hello.o -lc++ -lc++abi -lgcc_s.1 -lSystem -o hello_out 2>&1 | grep -v "built for iOS Simulator" | head -12
+          file hello_out
