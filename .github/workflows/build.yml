@@ -85,8 +85,11 @@ jobs:
           foreach(src IN LISTS ALL_ENGINE_SOURCES ALL_DEP_SOURCES)
               if(NOT src MATCHES "/NX/" AND 
                  NOT src MATCHES "/MiniAudio/" AND 
+                 NOT src MATCHES "/PortAudio/" AND 
+                 NOT src MATCHES "/Oboe/" AND 
                  NOT src MATCHES "/WASAPI/" AND 
                  NOT src MATCHES "/XAudio/" AND 
+                 NOT src MATCHES "/FAudio/" AND 
                  NOT src MATCHES "/DSound/" AND 
                  NOT src MATCHES "/ALSA/" AND 
                  NOT src MATCHES "/PulseAudio/" AND 
@@ -105,7 +108,9 @@ jobs:
                  NOT src MATCHES "/Steam/" AND 
                  NOT src MATCHES "/EOS/" AND 
                  NOT src MATCHES "/Origin/" AND 
-                 NOT src MATCHES "/Audio/Legacy/")
+                 NOT src MATCHES "/Audio/Legacy/" AND 
+                 NOT src MATCHES "/Audio/Dummy/" AND 
+                 NOT src MATCHES "/Input/Dummy/")
                   list(APPEND RETRO_FILES "${src}")
               endif()
           endforeach()
@@ -128,7 +133,7 @@ jobs:
           add_executable(RetroEngine ${RETRO_FILES} ${GAME_SOURCES})
 
           target_compile_definitions(RetroEngine PRIVATE
-              RETRO_REV02=1
+              RETRO_REVISION=3
               RETRO_USING_SDL2=1
               RSDK_USE_SDL2=1
               GLES_SILENCE_DEPRECATION=1
@@ -177,8 +182,8 @@ jobs:
             -DCMAKE_C_COMPILER=clang \
             -DCMAKE_CXX_COMPILER=clang++ \
             -DCMAKE_OBJC_COMPILER=clang \
-            -DCMAKE_C_FLAGS="--target=armv7-apple-ios8.0 -isysroot $SDK -I$STUBS -include $STUBS/iOS11_Stubs.h -fno-exceptions -Wno-error -Wno-implicit-function-declaration -Wno-int-conversion -Wno-incompatible-pointer-types -Wno-deprecated-declarations -std=gnu99" \
-            -DCMAKE_CXX_FLAGS="--target=armv7-apple-ios8.0 -isysroot $SDK -I$STUBS -include $STUBS/iOS11_Stubs.h -I/usr/lib/llvm-18/include/c++/v1 -fno-exceptions -Wno-error -Wno-deprecated-declarations -Wno-objc-method-access -x objective-c++" \
+            -DCMAKE_C_FLAGS="--target=armv7-apple-ios8.0 -isysroot $SDK -I$STUBS -fno-exceptions -Wno-error -Wno-implicit-function-declaration -Wno-int-conversion -Wno-incompatible-pointer-types -Wno-deprecated-declarations -std=gnu99" \
+            -DCMAKE_CXX_FLAGS="--target=armv7-apple-ios8.0 -isysroot $SDK -I$STUBS -I/usr/lib/llvm-18/include/c++/v1 -fno-exceptions -Wno-error -Wno-deprecated-declarations" \
             -DCMAKE_OBJC_FLAGS="--target=armv7-apple-ios8.0 -isysroot $SDK -I$STUBS -include $STUBS/iOS11_Stubs.h -Wno-error -Wno-implicit-function-declaration -Wno-int-conversion -Wno-incompatible-pointer-types -Wno-deprecated-declarations -Wno-objc-method-access" \
             -DCMAKE_EXE_LINKER_FLAGS="--target=armv7-apple-ios8.0 -isysroot $SDK -miphoneos-version-min=8.0 -lc++ -lc++abi -lgcc_s.1" \
             -DRETRO_USE_MOD_LOADER=OFF \
