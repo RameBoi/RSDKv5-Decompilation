@@ -22,8 +22,10 @@ jobs:
           mkdir -p Game/dependencies/RSDKv5
           tar --exclude=./Game --exclude=./.git --exclude=./sdks --exclude=./theos -cf - . | tar -xf - -C Game/dependencies/RSDKv5
           ls Game/dependencies/RSDKv5/platforms
-      - name: IOSBUILD configure
+      - name: IOSBUILD configure v2
         run: |
+          echo "=== llvm tools available"; ls /usr/lib/llvm-18/bin | grep -E "libtool|ranlib|^llvm-ar|otool|llvm-nm|strip"
+          LB=/usr/lib/llvm-18/bin
           SDK=$PWD/sdks/iPhoneOS10.3.sdk
           CF="--target=armv7s-apple-ios8.0 -isysroot $SDK -w"
           CXXF="-nostdinc++ -isystem /usr/lib/llvm-18/include/c++/v1 -fno-exceptions -fno-rtti"
@@ -32,6 +34,11 @@ jobs:
             -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \
             -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
             -DCMAKE_OBJC_COMPILER=clang -DCMAKE_OBJCXX_COMPILER=clang++ \
+            -DCMAKE_INSTALL_NAME_TOOL=/bin/true \
+            -DCMAKE_AR=$LB/llvm-ar -DCMAKE_RANLIB=$LB/llvm-ranlib \
+            -DCMAKE_LIBTOOL=$LB/llvm-libtool-darwin \
+            -DCMAKE_NM=$LB/llvm-nm -DCMAKE_OTOOL=$LB/llvm-otool \
+            -DCMAKE_STRIP=$LB/llvm-strip -DCMAKE_OBJDUMP=$LB/llvm-objdump \
             -DCMAKE_C_FLAGS="$CF" -DCMAKE_CXX_FLAGS="$CF $CXXF" \
             -DCMAKE_OBJC_FLAGS="$CF" -DCMAKE_OBJCXX_FLAGS="$CF $CXXF" \
             -DCMAKE_EXE_LINKER_FLAGS="--target=armv7s-apple-ios8.0 -isysroot $SDK -fuse-ld=$GITHUB_WORKSPACE/theos/toolchain/linux/iphone/bin/ld -nostdlib" \
