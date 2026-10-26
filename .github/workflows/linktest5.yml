@@ -1,0 +1,54 @@
+name: linktest5
+on:
+  push:
+    branches: [ios]
+jobs:
+  linktest5:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install Theos
+        uses: Randomblock1/theos-action@v1
+      - name: Get SDKs and C++ headers
+        run: |
+          git clone --depth=1 https://github.com/theos/sdks
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libc++-18-dev libc++abi-18-dev
+      - name: LINKTEST5 armv7 and armv7s
+        run: |
+          cat > hello.cpp <<'EOF'
+          #include <iostream>
+          #include <string>
+          #include <vector>
+          int main() {
+              std::vector<std::string> v = {"hello", "ios8"};
+              for (auto &s : v) std::cout << s << std::endl;
+              return 0;
+          }
+          EOF
+          cat > stubs.cpp <<'EOF'
+          extern "C" void abort(void);
+          extern "C" int __divsi3(int a, int b) {
+              int neg = 0;
+              unsigned ua, ub;
+              if (a < 0) { ua = -(unsigned)a; neg ^= 1; } else ua = a;
+              if (b < 0) { ub = -(unsigned)b; neg ^= 1; } else ub = b;
+              unsigned q = 0, r = 0;
+              for (int i = 31; i >= 0; i--) {
+                  r = (r << 1) | ((ua >> i) & 1);
+                  if (r >= ub) { r -= ub; q |= 1u << i; }
+              }
+              return neg ? -(int)q : (int)q;
+          }
+          namespace std { inline namespace __1 {
+              __attribute__((noreturn)) void __libcpp_verbose_abort(const char*, ...) { abort(); }
+          } }
+          EOF
+          LD=$GITHUB_WORKSPACE/theos/toolchain/linux/iphone/bin/ld
+          SDK=$PWD/sdks/iPhoneOS10.3.sdk
+          for ARCH in armv7 armv7s; do
+            echo "=== $ARCH"
+            clang++ --target=$ARCH-apple-ios8.0 -isysroot $SDK -nostdinc++ -isystem /usr/lib/llvm-18/include/c++/v1 -std=c++11 -O1 -fno-exceptions -fno-rtti -c hello.cpp -o hello_$ARCH.o
+            clang++ --target=$ARCH-apple-ios8.0 -isysroot $SDK -std=c++11 -O1 -fno-exceptions -fno-rtti -c stubs.cpp -o stubs_$ARCH.o
+            $LD -arch $ARCH -ios_version_min 8.0 -syslibroot $SDK hello_$ARCH.o stubs_$ARCH.o -lc++ -lSystem -o hello_$ARCH 2>&1 | grep -v "built for iOS Simulator" | head -12
+            file hello_$ARCH
+          done
