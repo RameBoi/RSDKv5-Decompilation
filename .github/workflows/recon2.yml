@@ -1,0 +1,21 @@
+name: recon2
+on:
+  push:
+    branches: [ios]
+jobs:
+  recon2:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: RECON2 layout
+        run: |
+          echo "=== dependencies"; ls dependencies dependencies/all dependencies/ios
+          echo "=== ogg"; ls dependencies/ios/ogg | head -30
+          echo "=== theora"; ls dependencies/ios/theora | head -30
+          echo "=== vorbis"; ls dependencies/ios/vorbis | head -30
+          echo "=== device files pulled in by"; grep -n "#include" RSDKv5/RSDK/Audio/Audio.cpp RSDKv5/RSDK/Graphics/Drawing.cpp RSDKv5/RSDK/Input/Input.cpp | grep -i "sdl\|portaudio\|oboe\|device\|ogg\|vorbis" | head -30
+          echo "=== video includes"; grep -n "#include" RSDKv5/RSDK/Graphics/Video.cpp | head -20
+          echo "=== iOS settings"; sed -n 400,416p RSDKv5/RSDK/Core/RetroEngine.hpp; sed -n 466,476p RSDKv5/RSDK/Core/RetroEngine.hpp
+          echo "=== Android.cmake"; head -60 platforms/Android.cmake
