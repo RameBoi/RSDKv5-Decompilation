@@ -21,11 +21,13 @@ jobs:
           rm -rf Game/dependencies/RSDKv5
           mkdir -p Game/dependencies/RSDKv5
           tar --exclude=./Game --exclude=./.git --exclude=./sdks --exclude=./theos -cf - . | tar -xf - -C Game/dependencies/RSDKv5
-      - name: IOSBUILD configure v5
+      - name: IOSBUILD configure v6
         run: |
+          mkdir -p stubs
+          printf '#ifndef AVAIL_VERSIONS_STUB_H\n#define AVAIL_VERSIONS_STUB_H\n#endif\n' > stubs/AvailabilityVersions.h
           LB=/usr/lib/llvm-18/bin
           SDK=$PWD/sdks/iPhoneOS10.3.sdk
-          CF="--target=armv7s-apple-ios8.0 -isysroot $SDK -w"
+          CF="--target=armv7s-apple-ios8.0 -isysroot $SDK -w -I$PWD/stubs -UGAME_INCLUDE_EDITOR"
           CXXF="-nostdinc++ -isystem /usr/lib/llvm-18/include/c++/v1 -fno-exceptions -fno-rtti"
           cmake -S Game -B build \
             -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_SYSROOT=$SDK -DCMAKE_SYSROOT=$SDK \
@@ -40,18 +42,18 @@ jobs:
             -DCMAKE_EXE_LINKER_FLAGS="--target=armv7s-apple-ios8.0 -isysroot $SDK -fuse-ld=$GITHUB_WORKSPACE/theos/toolchain/linux/iphone/bin/ld -nostdlib" \
             -DPLATFORM=iOS -DGAME_STATIC=ON -DRETRO_MOD_LOADER=OFF -DWITH_RSDK=ON > configure.log 2>&1 || (tail -30 configure.log; exit 1)
           tail -3 configure.log
-      - name: IOSBUILD patch SDL flags v5
+      - name: IOSBUILD patch SDL flags v6
         run: |
           F=$(find build -path "*SDL2-static.dir/flags.make" | head -1)
           sed -i 's/-std=gnu++17//g' $F || true
-      - name: IOSBUILD compile v5
+      - name: IOSBUILD compile v6
         run: |
           cmake --build build -j4 -- -k > build.log 2>&1 || echo "BUILD FAILED"
+          echo "=== first 10 errors"; grep -E "error:" build.log | head -10 | cut -c1-240 || true
           echo "=== errors by folder"; grep -E "error:" build.log | sed -E 's#^(/[^:]*)/[^/:]*:.*#\1#' | sed 's#.*/RSDKv5-Decompilation/##' | sort | uniq -c | sort -rn | head -8 || true
-      - name: RECON3 game headers
+          echo "=== tail"; tail -5 build.log | cut -c1-200
+      - name: RECON4 header structure
         run: |
-          echo "=== Game.h includes and conditions"; grep -n "#include\|#if\|#endif\|#else" Game/SonicMania/Game.h | head -50 || true
-          echo "=== who defines RSDKFunctionTable"; grep -rln "RSDKFunctionTable" Game --include=*.h | head -8 || true
-          echo "=== SonicMania dir"; ls -la Game/SonicMania | head -30 || true
-          echo "=== compile flags for the game target"; F=$(find build -path "*SonicMania.dir/flags.make" | head -1); echo $F; cat $F | cut -c1-500 || true
-          echo "=== leftover SDL uikit error"; grep -B1 -A6 "uikit.*error:" build.log | head -24 | cut -c1-260 || true
+          echo "=== Game.h lines 28-46"; sed -n 28,46p Game/SonicMania/Game.h | cat -n || true
+          echo "=== Game.h lines 74-86"; sed -n 74,86p Game/SonicMania/Game.h | cat -n || true
+          echo "=== Game.c first 8 lines"; head -8 Game/SonicMania/Game.c || true
