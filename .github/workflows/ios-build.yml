@@ -1,0 +1,43 @@
+name: ios-build
+on:
+  push:
+    branches: [ios]
+jobs:
+  ios-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Install Theos
+        uses: Randomblock1/theos-action@v1
+      - name: Get SDKs and C++ headers
+        run: |
+          git clone --depth=1 https://github.com/theos/sdks
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libc++-18-dev libc++abi-18-dev cmake
+      - name: Put our RSDKv5 into the Mania game build
+        run: |
+          rm -rf Game/dependencies/RSDKv5
+          mkdir -p Game/dependencies/RSDKv5
+          tar --exclude=./Game --exclude=./.git --exclude=./sdks --exclude=./theos -cf - . | tar -xf - -C Game/dependencies/RSDKv5
+          ls Game/dependencies/RSDKv5/platforms
+      - name: IOSBUILD configure
+        run: |
+          SDK=$PWD/sdks/iPhoneOS10.3.sdk
+          CF="--target=armv7s-apple-ios8.0 -isysroot $SDK -w"
+          CXXF="-nostdinc++ -isystem /usr/lib/llvm-18/include/c++/v1 -fno-exceptions -fno-rtti"
+          cmake -S Game -B build \
+            -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_SYSROOT=$SDK -DCMAKE_SYSROOT=$SDK \
+            -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \
+            -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+            -DCMAKE_OBJC_COMPILER=clang -DCMAKE_OBJCXX_COMPILER=clang++ \
+            -DCMAKE_C_FLAGS="$CF" -DCMAKE_CXX_FLAGS="$CF $CXXF" \
+            -DCMAKE_OBJC_FLAGS="$CF" -DCMAKE_OBJCXX_FLAGS="$CF $CXXF" \
+            -DCMAKE_EXE_LINKER_FLAGS="--target=armv7s-apple-ios8.0 -isysroot $SDK -fuse-ld=$GITHUB_WORKSPACE/theos/toolchain/linux/iphone/bin/ld -nostdlib" \
+            -DPLATFORM=iOS -DGAME_STATIC=ON -DRETRO_MOD_LOADER=OFF -DWITH_RSDK=ON 2>&1 | tail -40
+      - name: IOSBUILD compile and link
+        run: |
+          cmake --build build -j4 -- -k > build.log 2>&1 || echo "BUILD FAILED"
+          echo "=== errors"; grep -E "error:|Undefined symbols|ld: |CMake Error" build.log | sort -u | head -60
+          echo "=== tail"; tail -15 build.log
