@@ -1,0 +1,159 @@
+name: Build Sonic Mania iOS 8
+
+on:
+  push:
+    branches: [ios]
+  workflow_dispatch:
+
+jobs:
+  ios-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Theos & Build Tools
+        uses: Randomblock1/theos-action@v1
+
+      - name: Get SDKs and Toolchain Dependencies
+        run: |
+          git clone --depth=1 https://github.com/theos/sdks
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libc++-18-dev libc++abi-18-dev cmake ninja-build dpkg zip
+
+      - name: Put RSDKv5 into Game Submodule Structure
+        run: |
+          rm -rf Game/dependencies/RSDKv5
+          mkdir -p Game/dependencies/RSDKv5
+          tar --exclude=./Game --exclude=./.git --exclude=./sdks --exclude=./theos -cf - . | tar -xf - -C Game/dependencies/RSDKv5
+          
+          # Patch iOS.cmake inside RSDKv5 to link SDL2main alongside SDL2-static
+          if [ -f "Game/dependencies/RSDKv5/platforms/iOS.cmake" ]; then
+              sed -i 's/target_link_libraries(RetroEngine SDL2-static/target_link_libraries(RetroEngine SDL2main SDL2-static/' Game/dependencies/RSDKv5/platforms/iOS.cmake
+          fi
+
+      - name: Configure CMake for iOS 8 (armv7 + GLES2)
+        run: |
+          mkdir -p stubs
+          printf '#ifndef AVAIL_VERSIONS_STUB_H\n#define AVAIL_VERSIONS_STUB_H\n#endif\n' > stubs/AvailabilityVersions.h
+          
+          cat > stubs/platver.c <<'EOF'
+          typedef unsigned int u32;
+          int __isPlatformVersionAtLeast(u32 platform, u32 major, u32 minor, u32 sub) { return major <= 8; }
+          EOF
+
+          LB=/usr/lib/llvm-18/bin
+          SDK=$PWD/sdks/iPhoneOS10.3.sdk
+          
+          clang --target=armv7-apple-ios8.0 -isysroot $SDK -w -c stubs/platver.c -o stubs/platver.o
+          
+          # Explicitly pass GLES2 and OpenGL definitions so SDL2RenderDevice selects GLES 2.0
+          CF="--target=armv7-apple-ios8.0 -isysroot $SDK -w -I$PWD/stubs -UGAME_INCLUDE_EDITOR -DRETRO_USING_GLES2=1 -DRETRO_USING_OPENGL=1 -DGLES_SILENCE_DEPRECATION=1"
+          CXXF="-nostdinc++ -isystem /usr/lib/llvm-18/include/c++/v1 -fno-exceptions -fno-rtti"
+          
+          cmake -S Game -B build \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_SYSROOT=$SDK \
+            -DCMAKE_SYSROOT=$SDK \
+            -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \
+            -DCMAKE_C_COMPILER=clang \
+            -DCMAKE_CXX_COMPILER=clang++ \
+            -DCMAKE_OBJC_COMPILER=clang \
+            -DCMAKE_OBJCXX_COMPILER=clang++ \
+            -DCMAKE_INSTALL_NAME_TOOL=/bin/true \
+            -DCMAKE_AR=$LB/llvm-ar \
+            -DCMAKE_RANLIB=$LB/llvm-ranlib \
+            -DCMAKE_NM=$LB/llvm-nm \
+            -DCMAKE_STRIP=$LB/llvm-strip \
+            -DCMAKE_OBJDUMP=$LB/llvm-objdump \
+            -DCMAKE_C_FLAGS="$CF" \
+            -DCMAKE_CXX_FLAGS="$CF $CXXF" \
+            -DCMAKE_OBJC_FLAGS="$CF" \
+            -DCMAKE_OBJCXX_FLAGS="$CF $CXXF" \
+            -DCMAKE_EXE_LINKER_FLAGS="--target=armv7-apple-ios8.0 -isysroot $SDK -fuse-ld=$GITHUB_WORKSPACE/theos/toolchain/linux/iphone/bin/ld -nostdlib -lgcc_s.1 -lobjc $PWD/stubs/platver.o -Wl,-undefined,dynamic_lookup" \
+            -DPLATFORM=iOS \
+            -DGAME_STATIC=ON \
+            -DRETRO_MOD_LOADER=OFF \
+            -DRETRO_USING_GLES2=ON \
+            -DRETRO_USING_OPENGL=ON \
+            -DWITH_RSDK=ON
+
+      - name: Patch C++ Standard Flags & Build
+        run: |
+          F=$(find build -path "*SDL2-static.dir/flags.make" | head -1)
+          [ -n "$F" ] && sed -i 's/-std=gnu++17//g' $F || true
+          
+          R=$(find build -path "*RetroEngine.dir/flags.make" | head -1)
+          [ -n "$R" ] && sed -i -E 's/-std=(gnu|c)\+\+(11|98|03)/-std=gnu++17/g' $R || true
+          
+          cmake --build build -j$(nproc)
+
+      - name: Code Sign & Package IPA / DEB
+        run: |
+          BIN=$(find build -type f -name RSDKv5U | head -1)
+          if [ -z "$BIN" ]; then
+            echo "Build failed: RSDKv5U binary was not generated."
+            exit 1
+          fi
+          
+          APP=out/Payload/RSDKv5U.app
+          mkdir -p $APP
+          cp "$BIN" $APP/RSDKv5U
+          chmod +x $APP/RSDKv5U
+          
+          cat > $APP/Info.plist <<'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleDevelopmentRegion</key><string>en</string>
+              <key>CFBundleExecutable</key><string>RSDKv5U</string>
+              <key>CFBundleIdentifier</key><string>com.rameboi.sonicmania</string>
+              <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+              <key>CFBundleName</key><string>Sonic Mania</string>
+              <key>CFBundlePackageType</key><string>APPL</string>
+              <key>CFBundleShortVersionString</key><string>1.0.0</string>
+              <key>CFBundleVersion</key><string>1</string>
+              <key>LSRequiresIPhoneOS</key><true/>
+              <key>MinimumOSVersion</key><string>8.0</string>
+              <key>UIDeviceFamily</key><array><integer>1</integer><integer>2</integer></array>
+              <key>UIRequiredDeviceCapabilities</key><array><string>armv7</string><string>opengles-2</string></array>
+              <key>UISupportedInterfaceOrientations</key><array><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>
+              <key>UIStatusBarHidden</key><true/>
+              <key>UIRequiresFullScreen</key><true/>
+          </dict>
+          </plist>
+          EOF
+          
+          # Ad-hoc sign the executable with ldid
+          $GITHUB_WORKSPACE/theos/toolchain/linux/iphone/bin/ldid -S $APP/RSDKv5U
+          
+          # Create .ipa package
+          (cd out && zip -qr SonicMania_iOS8.ipa Payload)
+          
+          # Create .deb package
+          mkdir -p deb/Applications deb/DEBIAN
+          cp -r $APP deb/Applications/
+          
+          cat > deb/DEBIAN/control <<'EOF'
+          Package: com.rameboi.sonicmania
+          Name: Sonic Mania
+          Version: 1.0.0
+          Architecture: iphoneos-arm
+          Description: Sonic Mania (RSDKv5) port for iOS 8
+          Maintainer: RameBoi
+          Section: Games
+          Depends: firmware (>= 8.0)
+          EOF
+          
+          printf '#!/bin/sh\nchmod -R 755 /Applications/RSDKv5U.app\nuicache\nexit 0\n' > deb/DEBIAN/postinst
+          chmod 755 deb/DEBIAN/postinst
+          dpkg-deb -b deb out/SonicMania_iOS8.deb
+
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: SonicMania-iOS8
+          path: out/*
