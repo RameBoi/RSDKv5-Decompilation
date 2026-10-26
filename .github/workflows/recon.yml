@@ -1,0 +1,27 @@
+name: recon
+on:
+  push:
+    branches: [ios]
+jobs:
+  recon:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Layout
+        run: |
+          ls
+          echo "--- platforms"; ls platforms
+          echo "--- gitmodules"; cat .gitmodules
+          echo "--- ios/apple in CMakeLists"; grep -n -i "ios\|apple" CMakeLists.txt | head -40
+      - name: Problem spots
+        run: |
+          echo "--- filesystem"; grep -rn "filesystem" RSDKv5 dependencies Game --include=*.cpp --include=*.hpp --include=*.h | head -40
+          echo "--- thread_local"; grep -rn "thread_local" RSDKv5 dependencies Game | head -20
+      - name: SDKs and tools
+        run: |
+          git clone --depth=1 https://github.com/theos/sdks
+          ls sdks
+          clang --version
+          ls /usr/bin | grep -i lld || true
