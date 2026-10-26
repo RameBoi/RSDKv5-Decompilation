@@ -28,14 +28,14 @@ jobs:
         run: |
           mkdir -p stubs
           
-          # Create header stub for AvailabilityVersions.h missing in iOS 10.3 SDK
+          # Header stub for AvailabilityVersions.h missing in iOS 10.3 SDK
           cat > stubs/AvailabilityVersions.h <<'EOF'
           #ifndef _AVAILABILITY_VERSIONS_H_
           #define _AVAILABILITY_VERSIONS_H_
           #endif
           EOF
 
-          # Create Objective-C category stub for iOS 11+ UIViewController methods missing in iOS 10.3 SDK
+          # Objective-C category stub for iOS 11+ UIViewController methods missing in iOS 10.3 SDK
           cat > stubs/iOS11_Stubs.h <<'EOF'
           #ifndef IOS11_STUBS_H
           #define IOS11_STUBS_H
@@ -72,16 +72,31 @@ jobs:
 
           mkdir -p platforms
           cat > platforms/iOS.cmake <<'EOF'
-          file(GLOB_RECURSE ENGINE_SOURCES 
-              "RSDKv5/*.cpp" "RSDKv5/*.c" "RSDKv5/*.mm"
-          )
-          file(GLOB_RECURSE GAME_SOURCES 
-              "Game/SonicMania/*.cpp" "Game/SonicMania/*.c"
+          set(RETRO_SUBSYSTEM "SDL2" CACHE STRING "Subsystem" FORCE)
+
+          # Add only SDL2 backend sources to RETRO_FILES
+          list(APPEND RETRO_FILES
+              "RSDKv5/RSDK/Graphics/SDL/SDLRenderDevice.cpp"
+              "RSDKv5/RSDK/Audio/SDL/SDLAudioDevice.cpp"
+              "RSDKv5/RSDK/Input/SDL/SDLInputDevice.cpp"
+              "RSDKv5/RSDK/User/Dummy/UserDummy.cpp"
+              "${CMAKE_SOURCE_DIR}/stubs.cpp"
           )
 
           add_subdirectory(dependencies/ios/SDL EXCLUDE_FROM_ALL)
 
-          add_executable(RetroEngine ${ENGINE_SOURCES} ${GAME_SOURCES} ${CMAKE_SOURCE_DIR}/stubs.cpp)
+          find_library(UIKIT_LIB UIKit)
+          find_library(FOUNDATION_LIB Foundation)
+          find_library(OPENGLES_LIB OpenGLES)
+          find_library(QUARTZ_LIB QuartzCore)
+          find_library(AUDIOTB_LIB AudioToolbox)
+          find_library(AVFOUNDATION_LIB AVFoundation)
+          find_library(GAMECONTROLLER_LIB GameController)
+          find_library(COREGRAPHICS_LIB CoreGraphics)
+
+          file(GLOB_RECURSE GAME_SOURCES "Game/SonicMania/*.cpp" "Game/SonicMania/*.c")
+
+          add_executable(RetroEngine ${RETRO_FILES} ${GAME_SOURCES})
 
           target_compile_definitions(RetroEngine PRIVATE
               RETRO_REV02=1
@@ -99,15 +114,6 @@ jobs:
               dependencies/ios/vorbis/include
               dependencies/ios/theora/include
           )
-
-          find_library(UIKIT_LIB UIKit)
-          find_library(FOUNDATION_LIB Foundation)
-          find_library(OPENGLES_LIB OpenGLES)
-          find_library(QUARTZ_LIB QuartzCore)
-          find_library(AUDIOTB_LIB AudioToolbox)
-          find_library(AVFOUNDATION_LIB AVFoundation)
-          find_library(GAMECONTROLLER_LIB GameController)
-          find_library(COREGRAPHICS_LIB CoreGraphics)
 
           target_link_libraries(RetroEngine PRIVATE
               SDL2-static
