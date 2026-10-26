@@ -21,7 +21,7 @@ jobs:
           rm -rf Game/dependencies/RSDKv5
           mkdir -p Game/dependencies/RSDKv5
           tar --exclude=./Game --exclude=./.git --exclude=./sdks --exclude=./theos -cf - . | tar -xf - -C Game/dependencies/RSDKv5
-      - name: IOSBUILD configure v4
+      - name: IOSBUILD configure v5
         run: |
           LB=/usr/lib/llvm-18/bin
           SDK=$PWD/sdks/iPhoneOS10.3.sdk
@@ -39,20 +39,19 @@ jobs:
             -DCMAKE_OBJC_FLAGS="$CF" -DCMAKE_OBJCXX_FLAGS="$CF $CXXF" \
             -DCMAKE_EXE_LINKER_FLAGS="--target=armv7s-apple-ios8.0 -isysroot $SDK -fuse-ld=$GITHUB_WORKSPACE/theos/toolchain/linux/iphone/bin/ld -nostdlib" \
             -DPLATFORM=iOS -DGAME_STATIC=ON -DRETRO_MOD_LOADER=OFF -DWITH_RSDK=ON > configure.log 2>&1 || (tail -30 configure.log; exit 1)
-          tail -4 configure.log
-      - name: IOSBUILD patch SDL flags v4
+          tail -3 configure.log
+      - name: IOSBUILD patch SDL flags v5
         run: |
           F=$(find build -path "*SDL2-static.dir/flags.make" | head -1)
-          echo "file: $F"
-          echo "=== before"; grep -n "gnu++17" $F | cut -c1-120 || true
           sed -i 's/-std=gnu++17//g' $F || true
-          echo "=== after"; grep -c "gnu++17" $F || true
-      - name: IOSBUILD compile v4
+      - name: IOSBUILD compile v5
         run: |
           cmake --build build -j4 -- -k > build.log 2>&1 || echo "BUILD FAILED"
-          echo "=== first 12 errors, in order"; grep -E "error:" build.log | head -12 | cut -c1-260 || true
-          echo "=== first Game.c error with context"; grep -m1 -B2 -A14 "SonicMania/Game.c:" build.log | cut -c1-260 || true
-          echo "=== errors by folder"; grep -E "error:" build.log | sed -E 's#^(/[^:]*)/[^/:]*:.*#\1#' | sed 's#.*/RSDKv5-Decompilation/##' | sort | uniq -c | sort -rn | head -12 || true
-          echo "=== GameAPI location"; find . -path ./sdks -prune -o \( -name "GameAPI.h" -o -name "GameAPI" \) -print | head || true
-          echo "=== Game.h top"; head -30 Game/SonicMania/Game.h || true
-          echo "=== tail"; tail -6 build.log
+          echo "=== errors by folder"; grep -E "error:" build.log | sed -E 's#^(/[^:]*)/[^/:]*:.*#\1#' | sed 's#.*/RSDKv5-Decompilation/##' | sort | uniq -c | sort -rn | head -8 || true
+      - name: RECON3 game headers
+        run: |
+          echo "=== Game.h includes and conditions"; grep -n "#include\|#if\|#endif\|#else" Game/SonicMania/Game.h | head -50 || true
+          echo "=== who defines RSDKFunctionTable"; grep -rln "RSDKFunctionTable" Game --include=*.h | head -8 || true
+          echo "=== SonicMania dir"; ls -la Game/SonicMania | head -30 || true
+          echo "=== compile flags for the game target"; F=$(find build -path "*SonicMania.dir/flags.make" | head -1); echo $F; cat $F | cut -c1-500 || true
+          echo "=== leftover SDL uikit error"; grep -B1 -A6 "uikit.*error:" build.log | head -24 | cut -c1-260 || true
