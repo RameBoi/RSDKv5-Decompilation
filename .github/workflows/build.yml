@@ -1,99 +1,187 @@
-name: Build RSDKv5
+name: Build Sonic Mania iOS 8
 
-on: workflow_dispatch
-
-# each artifact is like 15MB so we'll start by only doing it manually
-# on:
-#   push:
-#     branches:
-#       - master
-
-# TODO: readd with: submodules: recursive once we can
+on:
+  push:
+    branches: [ios]
+  workflow_dispatch:
 
 jobs:
-  v5-windows:
-    runs-on: windows-2022
-    defaults:
-      run:
-        shell: msys2 {0}
-    steps:
-      - name: Checkout 
-        uses: actions/checkout@v2
-        with:
-          submodules: recursive
-      - name: Setup MSYS2
-        uses: msys2/setup-msys2@v2
-        with:
-          msystem: MINGW32
-          update: true
-          install: pkg-config make git mingw-w64-i686-gcc mingw-w64-i686-libogg mingw-w64-i686-libtheora
-      - name: Build RSDKv5 + U
-        run: |
-          make -j8 RSDK_ONLY=1 AUTOBUILD=1
-          make -j8 clean-rsdk
-          make -j8 RSDK_ONLY=1 RSDK_REVISION=3 AUTOBUILD=1
-      - name: Move artifacts
-        run: |
-          mkdir artifacts
-          mv ./bin/Windows/DX9/*.exe ./artifacts
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v1.0.0
-        with:
-          name: v5-windows
-          path: artifacts
-  v5-windows-x64:
-    runs-on: windows-2022
-    defaults:
-      run:
-        shell: msys2 {0}
-    steps:
-      - name: Checkout 
-        uses: actions/checkout@v2
-        with:
-          submodules: recursive
-      - name: Setup MSYS2
-        uses: msys2/setup-msys2@v2
-        with:
-          msystem: MINGW64
-          update: true
-          install: pkg-config make git mingw-w64-x86_64-gcc mingw-w64-x86_64-SDL2 mingw-w64-x86_64-libogg mingw-w64-x86_64-libtheora
-      - name: Build RSDKv5 + U
-        run: |
-          make -j8 RSDK_ONLY=1 AUTOBUILD=1
-          make -j8 clean-rsdk
-          make -j8 RSDK_ONLY=1 RSDK_REVISION=3 AUTOBUILD=1
-      - name: Move artifacts
-        run: |
-          mkdir artifacts
-          mv ./bin/Windows/DX9/*.exe ./artifacts
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v1.0.0
-        with:
-          name: v5-windows-x64
-          path: artifacts
-  v5-linux:
+  build-ios8:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout 
-        uses: actions/checkout@v2
+      - name: Checkout repository
+        uses: actions/checkout@v4
         with:
           submodules: recursive
-      - name: Install dependencies
+
+      - name: Install Theos & Tools
+        uses: Randomblock1/theos-action@v1
+
+      - name: Get SDKs and Dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install libogg-dev libsdl2-dev libtheora-dev libglew-dev libglfw3-dev
-      - name: Build RSDKv5 + U OGL
+          git clone --depth=1 https://github.com/theos/sdks
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libc++-18-dev libc++abi-18-dev cmake ninja-build dpkg
+
+      - name: Create Compatibility Stubs & iOS CMake Platform File
         run: |
-          make -j8 RSDK_ONLY=1 AUTOBUILD=1
-          make -j8 clean-rsdk
-          make -j8 RSDK_ONLY=1 RSDK_REVISION=3 AUTOBUILD=1
-      - name: Build RSDKv5 + U SDL2
+          mkdir -p stubs
+          
+          # Create header stub for AvailabilityVersions.h missing in iOS 10.3 SDK
+          cat > stubs/AvailabilityVersions.h <<'EOF'
+          #ifndef _AVAILABILITY_VERSIONS_H_
+          #define _AVAILABILITY_VERSIONS_H_
+          #endif
+          EOF
+
+          # Create Objective-C category stub for iOS 11+ UIViewController methods missing in iOS 10.3 SDK
+          cat > stubs/iOS11_Stubs.h <<'EOF'
+          #ifndef IOS11_STUBS_H
+          #define IOS11_STUBS_H
+          #ifdef __OBJC__
+          #import <UIKit/UIKit.h>
+          @interface UIViewController (iOS11CompatStubs)
+          - (void)setNeedsUpdateOfHomeIndicatorAutoHidden;
+          - (void)setNeedsUpdateOfScreenEdgesDeferringSystemGestures;
+          - (BOOL)prefersHomeIndicatorAutoHidden;
+          - (NSUInteger)preferredScreenEdgesDeferringSystemGestures;
+          @end
+          #endif
+          #endif
+          EOF
+
+          cat > stubs.cpp <<'EOF'
+          extern "C" void abort(void);
+          extern "C" int __divsi3(int a, int b) {
+              int neg = 0;
+              unsigned ua, ub;
+              if (a < 0) { ua = -(unsigned)a; neg = !neg; } else { ua = (unsigned)a; }
+              if (b < 0) { ub = -(unsigned)b; neg = !neg; } else { ub = (unsigned)b; }
+              unsigned q = 0, r = 0;
+              for (int i = 31; i >= 0; i--) {
+                  r = (r << 1) | ((ua >> i) & 1);
+                  if (r >= ub) { r -= ub; q |= (1u << i); }
+              }
+              return neg ? -(int)q : (int)q;
+          }
+          namespace std { inline namespace __1 {
+              __attribute__((noreturn)) void __libcpp_verbose_abort(const char*, ...) { abort(); }
+          } }
+          EOF
+
+          mkdir -p platforms
+          cat > platforms/iOS.cmake <<'EOF'
+          file(GLOB_RECURSE ENGINE_SOURCES 
+              "RSDKv5/*.cpp" "RSDKv5/*.c" "RSDKv5/*.mm"
+          )
+          file(GLOB_RECURSE GAME_SOURCES 
+              "Game/SonicMania/*.cpp" "Game/SonicMania/*.c"
+          )
+
+          add_subdirectory(dependencies/ios/SDL EXCLUDE_FROM_ALL)
+
+          add_executable(RetroEngine ${ENGINE_SOURCES} ${GAME_SOURCES} ${CMAKE_SOURCE_DIR}/stubs.cpp)
+
+          target_compile_definitions(RetroEngine PRIVATE
+              RETRO_REV02=1
+              RETRO_USING_SDL2=1
+              GLES_SILENCE_DEPRECATION=1
+          )
+
+          target_include_directories(RetroEngine PRIVATE
+              RSDKv5
+              Game/SonicMania
+              dependencies/ios/SDL/include
+              dependencies/all/tinyxml2
+              dependencies/all/stb_vorbis
+              dependencies/ios/ogg/include
+              dependencies/ios/vorbis/include
+              dependencies/ios/theora/include
+          )
+
+          find_library(UIKIT_LIB UIKit)
+          find_library(FOUNDATION_LIB Foundation)
+          find_library(OPENGLES_LIB OpenGLES)
+          find_library(QUARTZ_LIB QuartzCore)
+          find_library(AUDIOTB_LIB AudioToolbox)
+          find_library(AVFOUNDATION_LIB AVFoundation)
+          find_library(GAMECONTROLLER_LIB GameController)
+          find_library(COREGRAPHICS_LIB CoreGraphics)
+
+          target_link_libraries(RetroEngine PRIVATE
+              SDL2-static
+              ${UIKIT_LIB}
+              ${FOUNDATION_LIB}
+              ${OPENGLES_LIB}
+              ${QUARTZ_LIB}
+              ${AUDIOTB_LIB}
+              ${AVFOUNDATION_LIB}
+              ${GAMECONTROLLER_LIB}
+              ${COREGRAPHICS_LIB}
+          )
+          EOF
+
+      - name: Configure and Build Engine & Game
         run: |
-          make -j8 RSDK_ONLY=1 SUBSYSTEM=SDL2 AUTOBUILD=1
-          make -j8 clean-rsdk
-          make -j8 RSDK_ONLY=1 SUBSYSTEM=SDL2 RSDK_REVISION=3 AUTOBUILD=1
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v1.0.0
+          SDK=$PWD/sdks/iPhoneOS10.3.sdk
+          STUBS=$PWD/stubs
+          
+          mkdir -p build && cd build
+          
+          cmake .. \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_SYSROOT=$SDK \
+            -DCMAKE_SYSROOT=$SDK \
+            -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \
+            -DCMAKE_SYSTEM_PROCESSOR=armv7 \
+            -DCMAKE_C_COMPILER=clang \
+            -DCMAKE_CXX_COMPILER=clang++ \
+            -DCMAKE_OBJC_COMPILER=clang \
+            -DCMAKE_C_FLAGS="--target=armv7-apple-ios8.0 -isysroot $SDK -I$STUBS -include $STUBS/iOS11_Stubs.h -fno-exceptions -Wno-error -Wno-implicit-function-declaration -Wno-int-conversion -Wno-incompatible-pointer-types -Wno-deprecated-declarations -std=gnu99" \
+            -DCMAKE_CXX_FLAGS="--target=armv7-apple-ios8.0 -isysroot $SDK -I$STUBS -I/usr/lib/llvm-18/include/c++/v1 -fno-exceptions -Wno-error -Wno-deprecated-declarations -x objective-c++" \
+            -DCMAKE_OBJC_FLAGS="--target=armv7-apple-ios8.0 -isysroot $SDK -I$STUBS -include $STUBS/iOS11_Stubs.h -Wno-error -Wno-implicit-function-declaration -Wno-int-conversion -Wno-incompatible-pointer-types -Wno-deprecated-declarations -Wno-objc-method-access" \
+            -DCMAKE_EXE_LINKER_FLAGS="-arch armv7 -ios_version_min 8.0 -syslibroot $SDK -lc++ -lc++abi -lgcc_s.1" \
+            -DRETRO_USE_MOD_LOADER=OFF \
+            -DRETRO_SDL_VERSION=2 \
+            -DSDL_SHARED=OFF \
+            -DSDL_STATIC=ON
+
+          make -j$(nproc)
+
+      - name: Create DEB Package
+        run: |
+          mkdir -p deb_pkg/DEBIAN deb_pkg/Applications
+          cp -r build/*.app deb_pkg/Applications/ 2>/dev/null || cp -r build/RSDKv5U.app deb_pkg/Applications/
+          
+          cat > deb_pkg/DEBIAN/control <<'EOF'
+          Package: com.rameboi.sonicmania
+          Name: Sonic Mania
+          Version: 1.0.0
+          Architecture: iphoneos-arm
+          Description: Sonic Mania (RSDKv5) engine for iOS 8.4.1
+          Maintainer: RameBoi
+          Author: RameBoi
+          Section: Games
+          Depends: firmware (>= 8.0)
+          EOF
+
+          cat > deb_pkg/DEBIAN/postinst <<'EOF'
+          #!/bin/sh
+          chmod -R 755 /Applications/*.app
+          uicache
+          exit 0
+          EOF
+
+          chmod +x deb_pkg/DEBIAN/postinst
+          dpkg-deb -b deb_pkg build/SonicMania_iOS8.deb
+
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@v4
         with:
-          name: v5-linux
-          path: bin/Linux
+          name: SonicMania-iOS8-armv7
+          path: |
+            build/*.app
+            build/*.deb
+            build/RSDKv5*
+            build/RetroEngine*
