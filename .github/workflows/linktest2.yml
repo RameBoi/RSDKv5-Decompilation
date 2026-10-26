@@ -1,0 +1,41 @@
+name: linktest2
+on:
+  push:
+    branches: [ios]
+jobs:
+  linktest2:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install Theos
+        uses: Randomblock1/theos-action@v1
+      - name: Get SDKs and C++ headers
+        run: |
+          git clone --depth=1 https://github.com/theos/sdks
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libc++-18-dev libc++abi-18-dev
+      - name: Compile test program
+        run: |
+          cat > hello.cpp <<'EOF'
+          #include <iostream>
+          #include <string>
+          #include <vector>
+          int main() {
+              std::vector<std::string> v = {"hello", "ios8"};
+              for (auto &s : v) std::cout << s << std::endl;
+              return 0;
+          }
+          EOF
+          clang++ --target=armv7-apple-ios8.0 -isysroot $PWD/sdks/iPhoneOS10.3.sdk -nostdinc++ -isystem /usr/lib/llvm-18/include/c++/v1 -std=c++11 -c hello.cpp -o hello.o
+          file hello.o
+      - name: LINKTEST2 unwind libs
+        run: |
+          LD=$GITHUB_WORKSPACE/theos/toolchain/linux/iphone/bin/ld
+          SDK=$PWD/sdks/iPhoneOS10.3.sdk
+          echo "=== unwind-ish libs in SDK"
+          ls $SDK/usr/lib | grep -i "gcc\|unwind" || true
+          for EXTRA in "-lgcc_s.1" "-lunwind" "-lgcc_s.1 -lunwind"; do
+            echo "=== extra: $EXTRA"
+            $LD -arch armv7 -ios_version_min 8.0 -syslibroot $SDK hello.o -lc++ -lSystem $EXTRA -o hello_out 2>&1 | grep -v "built for iOS Simulator" | head -8 || true
+            file hello_out 2>&1 | head -1
+            rm -f hello_out
+          done
