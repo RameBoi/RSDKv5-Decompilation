@@ -74,11 +74,41 @@ jobs:
           cat > platforms/iOS.cmake <<'EOF'
           set(RETRO_SUBSYSTEM "SDL2" CACHE STRING "Subsystem" FORCE)
 
-          # Add only SDL2 backend sources to RETRO_FILES
-          list(APPEND RETRO_FILES
-              "RSDKv5/RSDK/Graphics/SDL/SDLRenderDevice.cpp"
-              "RSDKv5/RSDK/Audio/SDL/SDLAudioDevice.cpp"
-              "RSDKv5/RSDK/Input/SDL/SDLInputDevice.cpp"
+          set(RETRO_FILES
+              "RSDKv5/main.cpp"
+              "RSDKv5/RSDK/Core/RetroEngine.cpp"
+              "RSDKv5/RSDK/Core/Math.cpp"
+              "RSDKv5/RSDK/Core/Reader.cpp"
+              "RSDKv5/RSDK/Core/Link.cpp"
+              "RSDKv5/RSDK/Core/ModAPI.cpp"
+              "RSDKv5/RSDK/Dev/Debug.cpp"
+              "RSDKv5/RSDK/Storage/Storage.cpp"
+              "RSDKv5/RSDK/Storage/Text.cpp"
+              "RSDKv5/RSDK/Graphics/Drawing.cpp"
+              "RSDKv5/RSDK/Graphics/Scene3D.cpp"
+              "RSDKv5/RSDK/Graphics/Animation.cpp"
+              "RSDKv5/RSDK/Graphics/Sprite.cpp"
+              "RSDKv5/RSDK/Graphics/Palette.cpp"
+              "RSDKv5/RSDK/Graphics/Video.cpp"
+              "RSDKv5/RSDK/Audio/Audio.cpp"
+              "RSDKv5/RSDK/Input/Input.cpp"
+              "RSDKv5/RSDK/Scene/Scene.cpp"
+              "RSDKv5/RSDK/Scene/Collision.cpp"
+              "RSDKv5/RSDK/Scene/Object.cpp"
+              "RSDKv5/RSDK/Scene/Objects/DefaultObject.cpp"
+              "RSDKv5/RSDK/Scene/Objects/DevOutput.cpp"
+              "RSDKv5/RSDK/User/Core/UserAchievements.cpp"
+              "RSDKv5/RSDK/User/Core/UserCore.cpp"
+              "RSDKv5/RSDK/User/Core/UserLeaderboards.cpp"
+              "RSDKv5/RSDK/User/Core/UserPresence.cpp"
+              "RSDKv5/RSDK/User/Core/UserStats.cpp"
+              "RSDKv5/RSDK/User/Core/UserStorage.cpp"
+              "dependencies/all/tinyxml2/tinyxml2.cpp"
+              "dependencies/all/iniparser/iniparser.cpp"
+              "dependencies/all/iniparser/dictionary.cpp"
+              "RSDKv5/RSDK/Graphics/SDL2/SDL2RenderDevice.cpp"
+              "RSDKv5/RSDK/Audio/SDL2/SDL2AudioDevice.cpp"
+              "RSDKv5/RSDK/Input/SDL2/SDL2InputDevice.cpp"
               "RSDKv5/RSDK/User/Dummy/UserDummy.cpp"
               "${CMAKE_SOURCE_DIR}/stubs.cpp"
           )
@@ -101,14 +131,18 @@ jobs:
           target_compile_definitions(RetroEngine PRIVATE
               RETRO_REV02=1
               RETRO_USING_SDL2=1
+              RSDK_USE_SDL2=1
               GLES_SILENCE_DEPRECATION=1
           )
 
           target_include_directories(RetroEngine PRIVATE
               RSDKv5
+              RSDKv5/RSDK
               Game/SonicMania
               dependencies/ios/SDL/include
+              dependencies/all
               dependencies/all/tinyxml2
+              dependencies/all/iniparser
               dependencies/all/stb_vorbis
               dependencies/ios/ogg/include
               dependencies/ios/vorbis/include
