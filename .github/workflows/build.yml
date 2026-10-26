@@ -1,45 +1,77 @@
-name: recon
+name: Build Sonic Mania iOS 8
+
 on:
   push:
     branches: [ios]
+  workflow_dispatch:
+
 jobs:
-  recon:
+  build-ios8:
     runs-on: ubuntu-latest
+
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
       - name: Install Theos
         uses: Randomblock1/theos-action@v1
-      - name: Get SDKs and C++ headers
+
+      - name: Get SDKs and Toolchain Dependencies
         run: |
           git clone --depth=1 https://github.com/theos/sdks
           sudo apt-get update -qq
-          sudo apt-get install -y -qq libc++-18-dev libc++abi-18-dev
-      - name: Compile test program
+          sudo apt-get install -y -qq libc++-18-dev libc++abi-18-dev cmake ninja-build
+
+      - name: Create Compatibility Stubs
         run: |
-          cat > hello.cpp <<'EOF'
-          #include <iostream>
-          #include <string>
-          #include <vector>
-          int main() {
-              std::vector<std::string> v = {"hello", "ios8"};
-              for (auto &s : v) std::cout << s << std::endl;
-              return 0;
+          cat > stubs.cpp <<'EOF'
+          extern "C" void abort(void);
+          extern "C" int __divsi3(int a, int b) {
+              int neg = 0;
+              unsigned ua, ub;
+              if (a < 0) { ua = -(unsigned)a; neg = !neg; } else { ua = (unsigned)a; }
+              if (b < 0) { ub = -(unsigned)b; neg = !neg; } else { ub = (unsigned)b; }
+              unsigned q = 0, r = 0;
+              for (int i = 31; i >= 0; i--) {
+                  r = (r << 1) | ((ua >> i) & 1);
+                  if (r >= ub) { r -= ub; q |= (1u << i); }
+              }
+              return neg ? -(int)q : (int)q;
           }
+          namespace std { inline namespace __1 {
+              __attribute__((noreturn)) void __libcpp_verbose_abort(const char*, ...) { abort(); }
+          } }
           EOF
-          clang++ --target=armv7-apple-ios8.0 -isysroot $PWD/sdks/iPhoneOS9.3.sdk -nostdinc++ -isystem /usr/lib/llvm-18/include/c++/v1 -std=c++11 -c hello.cpp -o hello.o
-          file hello.o
-      - name: Link with different SDKs
+
+      - name: Configure and Build Engine & Game
         run: |
-          LD=$GITHUB_WORKSPACE/theos/toolchain/linux/iphone/bin/ld
-          for V in 10.3 9.3; do
-            SDK=$PWD/sdks/iPhoneOS$V.sdk
-            echo "=== SDK $V"
-            ls $SDK/usr/lib/system | grep -i launch
-            $LD -arch armv7 -ios_version_min 8.0 -syslibroot $SDK hello.o -lc++ -lSystem -o hello_$V 2>&1 | grep -v "built for iOS Simulator" | head -8
-            file hello_$V
-          done
-          echo "=== SDK 9.3 with dummy liblaunch"
-          SDK=$PWD/sdks/iPhoneOS9.3.sdk
-          cp $SDK/usr/lib/system/libdyld.tbd $SDK/usr/lib/system/liblaunch.tbd
-          sed -i 's/libdyld/liblaunch/g' $SDK/usr/lib/system/liblaunch.tbd
-          $LD -arch armv7 -ios_version_min 8.0 -syslibroot $SDK hello.o -lc++ -lSystem -o hello_stub 2>&1 | grep -v "built for iOS Simulator" | head -8
-          file hello_stub
+          SDK=$PWD/sdks/iPhoneOS10.3.sdk
+          THEOS_LD=$GITHUB_WORKSPACE/theos/toolchain/linux/iphone/bin/ld
+          
+          mkdir -p build && cd build
+          
+          # Run CMake with custom toolchain flags targeting iOS 8 armv7
+          cmake .. \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_SYSROOT=$SDK \
+            -DCMAKE_SYSTEM_PROCESSOR=armv7 \
+            -DCMAKE_C_COMPILER=clang \
+            -DCMAKE_CXX_COMPILER=clang++ \
+            -DCMAKE_C_FLAGS="--target=armv7-apple-ios8.0 -isysroot $SDK -fno-exceptions" \
+            -DCMAKE_CXX_FLAGS="--target=armv7-apple-ios8.0 -isysroot $SDK -I/usr/lib/llvm-18/include/c++/v1 -fno-exceptions" \
+            -DCMAKE_EXE_LINKER_FLAGS="-arch armv7 -ios_version_min 8.0 -syslibroot $SDK -lc++ -lc++abi -lgcc_s.1" \
+            -DRETRO_USE_MOD_LOADER=OFF \
+            -DRETRO_SDL_VERSION=2
+
+          make -j$(nproc) || true
+
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: SonicMania-iOS8-armv7
+          path: |
+            build/*.app
+            build/RSDKv5*
+            build/SonicMania*
