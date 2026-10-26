@@ -74,48 +74,52 @@ jobs:
           cat > platforms/iOS.cmake <<'EOF'
           set(RETRO_SUBSYSTEM "SDL2" CACHE STRING "Subsystem" FORCE)
 
-          file(GLOB_RECURSE ALL_ENGINE_SOURCES 
-              "RSDKv5/*.cpp" "RSDKv5/*.c" "RSDKv5/*.mm"
-          )
-          file(GLOB_RECURSE ALL_DEP_SOURCES
-              "dependencies/all/*.cpp" "dependencies/all/*.c"
-          )
+          if(EXISTS "${CMAKE_SOURCE_DIR}/RSDKv5/main.cpp")
+              set(RSDK_DIR "RSDKv5")
+          elseif(EXISTS "${CMAKE_SOURCE_DIR}/dependencies/RSDKv5/main.cpp")
+              set(RSDK_DIR "dependencies/RSDKv5")
+          else()
+              set(RSDK_DIR "RSDKv5")
+          endif()
 
-          set(RETRO_FILES "")
-          foreach(src IN LISTS ALL_ENGINE_SOURCES ALL_DEP_SOURCES)
-              if(NOT src MATCHES "/NX/" AND 
-                 NOT src MATCHES "/MiniAudio/" AND 
-                 NOT src MATCHES "/PortAudio/" AND 
-                 NOT src MATCHES "/Oboe/" AND 
-                 NOT src MATCHES "/WASAPI/" AND 
-                 NOT src MATCHES "/XAudio/" AND 
-                 NOT src MATCHES "/FAudio/" AND 
-                 NOT src MATCHES "/DSound/" AND 
-                 NOT src MATCHES "/ALSA/" AND 
-                 NOT src MATCHES "/PulseAudio/" AND 
-                 NOT src MATCHES "/DX11/" AND 
-                 NOT src MATCHES "/DX9/" AND 
-                 NOT src MATCHES "/D3D11/" AND 
-                 NOT src MATCHES "/OpenGL3/" AND 
-                 NOT src MATCHES "/GL3/" AND 
-                 NOT src MATCHES "/GLFW/" AND 
-                 NOT src MATCHES "/SDL1/" AND 
-                 NOT src MATCHES "/Vulkan/" AND 
-                 NOT src MATCHES "/DInput/" AND 
-                 NOT src MATCHES "/XInput/" AND 
-                 NOT src MATCHES "/RawInput/" AND 
-                 NOT src MATCHES "/WinInput/" AND 
-                 NOT src MATCHES "/Steam/" AND 
-                 NOT src MATCHES "/EOS/" AND 
-                 NOT src MATCHES "/Origin/" AND 
-                 NOT src MATCHES "/Legacy/" AND 
-                 NOT src MATCHES "/Audio/Dummy/" AND 
-                 NOT src MATCHES "/Input/Dummy/")
-                  list(APPEND RETRO_FILES "${src}")
-              endif()
-          endforeach()
-
-          list(APPEND RETRO_FILES "${CMAKE_SOURCE_DIR}/stubs.cpp")
+          set(RETRO_FILES
+              "${RSDK_DIR}/main.cpp"
+              "${RSDK_DIR}/RSDK/Core/RetroEngine.cpp"
+              "${RSDK_DIR}/RSDK/Core/Math.cpp"
+              "${RSDK_DIR}/RSDK/Core/Reader.cpp"
+              "${RSDK_DIR}/RSDK/Core/Link.cpp"
+              "${RSDK_DIR}/RSDK/Core/ModAPI.cpp"
+              "${RSDK_DIR}/RSDK/Dev/Debug.cpp"
+              "${RSDK_DIR}/RSDK/Storage/Storage.cpp"
+              "${RSDK_DIR}/RSDK/Storage/Text.cpp"
+              "${RSDK_DIR}/RSDK/Graphics/Drawing.cpp"
+              "${RSDK_DIR}/RSDK/Graphics/Scene3D.cpp"
+              "${RSDK_DIR}/RSDK/Graphics/Animation.cpp"
+              "${RSDK_DIR}/RSDK/Graphics/Sprite.cpp"
+              "${RSDK_DIR}/RSDK/Graphics/Palette.cpp"
+              "${RSDK_DIR}/RSDK/Graphics/Video.cpp"
+              "${RSDK_DIR}/RSDK/Audio/Audio.cpp"
+              "${RSDK_DIR}/RSDK/Input/Input.cpp"
+              "${RSDK_DIR}/RSDK/Scene/Scene.cpp"
+              "${RSDK_DIR}/RSDK/Scene/Collision.cpp"
+              "${RSDK_DIR}/RSDK/Scene/Object.cpp"
+              "${RSDK_DIR}/RSDK/Scene/Objects/DefaultObject.cpp"
+              "${RSDK_DIR}/RSDK/Scene/Objects/DevOutput.cpp"
+              "${RSDK_DIR}/RSDK/User/Core/UserAchievements.cpp"
+              "${RSDK_DIR}/RSDK/User/Core/UserCore.cpp"
+              "${RSDK_DIR}/RSDK/User/Core/UserLeaderboards.cpp"
+              "${RSDK_DIR}/RSDK/User/Core/UserPresence.cpp"
+              "${RSDK_DIR}/RSDK/User/Core/UserStats.cpp"
+              "${RSDK_DIR}/RSDK/User/Core/UserStorage.cpp"
+              "${RSDK_DIR}/RSDK/Graphics/SDL2/SDL2RenderDevice.cpp"
+              "${RSDK_DIR}/RSDK/Audio/SDL2/SDL2AudioDevice.cpp"
+              "${RSDK_DIR}/RSDK/Input/SDL2/SDL2InputDevice.cpp"
+              "${RSDK_DIR}/RSDK/User/Dummy/UserDummy.cpp"
+              "dependencies/all/tinyxml2/tinyxml2.cpp"
+              "dependencies/all/iniparser/iniparser.cpp"
+              "dependencies/all/iniparser/dictionary.cpp"
+              "${CMAKE_SOURCE_DIR}/stubs.cpp"
+          )
 
           add_subdirectory(dependencies/ios/SDL EXCLUDE_FROM_ALL)
 
@@ -144,8 +148,8 @@ jobs:
           )
 
           target_include_directories(RetroEngine PRIVATE
-              RSDKv5
-              RSDKv5/RSDK
+              ${RSDK_DIR}
+              ${RSDK_DIR}/RSDK
               Game/SonicMania
               dependencies/ios/SDL/include
               dependencies/all
