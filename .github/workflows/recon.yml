@@ -6,15 +6,27 @@ jobs:
   recon:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-      - name: Mania build file
+      - name: Get iOS 9.3 SDK
         run: |
-          echo "=== Game/CMakeLists.txt"; cat Game/CMakeLists.txt
-      - name: Platform clues
+          git clone --depth=1 https://github.com/theos/sdks
+          ls sdks/iPhoneOS9.3.sdk/usr/include/c++/v1 | head -5
+          ls sdks/iPhoneOS9.3.sdk/usr/lib | grep -i "c++\|libSystem" | head
+      - name: Compile tiny test program for armv7 iOS 8
         run: |
-          echo "=== platform names"; grep -n "RETRO_PLATFORM\|TARGET_OS\|__APPLE__\|RETRO_iOS\|RETRO_OSX" RSDKv5/RSDK/Core/RetroEngine.hpp | head -60
-          echo "=== xcode defines"; sed -n 1670,1700p RSDKv5.xcodeproj/project.pbxproj
-          echo "=== SDL version"; grep -n "define SDL_MAJOR_VERSION\|define SDL_MINOR_VERSION\|define SDL_PATCHLEVEL" dependencies/ios/SDL/include/SDL_version.h
-          echo "=== cocoaHelpers head"; head -40 RSDKv5/cocoaHelpers.mm
+          cat > hello.cpp <<'EOF'
+          #include <iostream>
+          #include <string>
+          #include <vector>
+          int main() {
+              std::vector<std::string> v = {"hello", "ios8"};
+              for (auto &s : v) std::cout << s << std::endl;
+              return 0;
+          }
+          EOF
+          SDK=$PWD/sdks/iPhoneOS9.3.sdk
+          clang++ --target=armv7-apple-ios8.0 -isysroot $SDK -stdlib=libc++ -std=c++11 -fuse-ld=/usr/bin/ld64.lld-18 hello.cpp -o hello
+          file hello
+      - name: Check minimum iOS version
+        run: |
+          ls /usr/lib/llvm-18/bin | grep -i "objdump" || true
+          /usr/lib/llvm-18/bin/llvm-objdump -p hello | grep -i -A4 "VERSION_MIN\|BUILD_VERSION" || true
