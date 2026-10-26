@@ -9,13 +9,12 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
-      - name: Build files
+      - name: Mania build file
         run: |
-          echo "=== CMakeLists.txt"; cat CMakeLists.txt
-          echo "=== platforms/Linux.cmake"; cat platforms/Linux.cmake
-      - name: iOS clues
+          echo "=== Game/CMakeLists.txt"; cat Game/CMakeLists.txt
+      - name: Platform clues
         run: |
-          echo "=== app glue files"; find . \( -path ./dependencies -o -path ./Game \) -prune -o \( -name "*.m" -o -name "*.mm" -o -name Info.plist \) -print | head -30
-          echo "=== RETRO_IOS"; grep -rn "RETRO_IOS" RSDKv5 | head -60
-          echo "=== render devices"; grep -n "RETRO_RENDERDEVICE" RSDKv5/RSDK/Core/RetroEngine.hpp | head -40
-          echo "=== xcode settings"; grep -n "IPHONEOS_DEPLOYMENT_TARGET\|GCC_PREPROCESSOR_DEFINITIONS\|RETRO_\|ARCHS\|CLANG_CXX_LANGUAGE_STANDARD" RSDKv5.xcodeproj/project.pbxproj | head -60
+          echo "=== platform names"; grep -n "RETRO_PLATFORM\|TARGET_OS\|__APPLE__\|RETRO_iOS\|RETRO_OSX" RSDKv5/RSDK/Core/RetroEngine.hpp | head -60
+          echo "=== xcode defines"; sed -n 1670,1700p RSDKv5.xcodeproj/project.pbxproj
+          echo "=== SDL version"; grep -n "define SDL_MAJOR_VERSION\|define SDL_MINOR_VERSION\|define SDL_PATCHLEVEL" dependencies/ios/SDL/include/SDL_version.h
+          echo "=== cocoaHelpers head"; head -40 RSDKv5/cocoaHelpers.mm
