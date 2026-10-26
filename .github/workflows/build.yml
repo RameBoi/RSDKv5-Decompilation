@@ -35,6 +35,22 @@ jobs:
           #endif
           EOF
 
+          # Create Objective-C category stub for iOS 11+ UIViewController methods missing in iOS 10.3 SDK
+          cat > stubs/iOS11_Stubs.h <<'EOF'
+          #ifndef IOS11_STUBS_H
+          #define IOS11_STUBS_H
+          #ifdef __OBJC__
+          #import <UIKit/UIKit.h>
+          @interface UIViewController (iOS11CompatStubs)
+          - (void)setNeedsUpdateOfHomeIndicatorAutoHidden;
+          - (void)setNeedsUpdateOfScreenEdgesDeferringSystemGestures;
+          - (BOOL)prefersHomeIndicatorAutoHidden;
+          - (NSUInteger)preferredScreenEdgesDeferringSystemGestures;
+          @end
+          #endif
+          #endif
+          EOF
+
           cat > stubs.cpp <<'EOF'
           extern "C" void abort(void);
           extern "C" int __divsi3(int a, int b) {
@@ -109,6 +125,7 @@ jobs:
       - name: Configure and Build Engine & Game
         run: |
           SDK=$PWD/sdks/iPhoneOS10.3.sdk
+          STUBS=$PWD/stubs
           
           mkdir -p build && cd build
           
@@ -121,9 +138,9 @@ jobs:
             -DCMAKE_C_COMPILER=clang \
             -DCMAKE_CXX_COMPILER=clang++ \
             -DCMAKE_OBJC_COMPILER=clang \
-            -DCMAKE_C_FLAGS="--target=armv7-apple-ios8.0 -isysroot $SDK -I$PWD/../stubs -fno-exceptions -Wno-error -Wno-implicit-function-declaration -Wno-int-conversion -Wno-incompatible-pointer-types -Wno-deprecated-declarations -Wno-objc-method-access -std=gnu99" \
-            -DCMAKE_CXX_FLAGS="--target=armv7-apple-ios8.0 -isysroot $SDK -I$PWD/../stubs -I/usr/lib/llvm-18/include/c++/v1 -fno-exceptions -Wno-error -Wno-deprecated-declarations" \
-            -DCMAKE_OBJC_FLAGS="--target=armv7-apple-ios8.0 -isysroot $SDK -I$PWD/../stubs -Wno-error -Wno-implicit-function-declaration -Wno-int-conversion -Wno-incompatible-pointer-types -Wno-deprecated-declarations -Wno-objc-method-access" \
+            -DCMAKE_C_FLAGS="--target=armv7-apple-ios8.0 -isysroot $SDK -I$STUBS -include $STUBS/iOS11_Stubs.h -fno-exceptions -Wno-error -Wno-implicit-function-declaration -Wno-int-conversion -Wno-incompatible-pointer-types -Wno-deprecated-declarations -std=gnu99" \
+            -DCMAKE_CXX_FLAGS="--target=armv7-apple-ios8.0 -isysroot $SDK -I$STUBS -I/usr/lib/llvm-18/include/c++/v1 -fno-exceptions -Wno-error -Wno-deprecated-declarations" \
+            -DCMAKE_OBJC_FLAGS="--target=armv7-apple-ios8.0 -isysroot $SDK -I$STUBS -include $STUBS/iOS11_Stubs.h -Wno-error -Wno-implicit-function-declaration -Wno-int-conversion -Wno-incompatible-pointer-types -Wno-deprecated-declarations -Wno-objc-method-access" \
             -DCMAKE_EXE_LINKER_FLAGS="-arch armv7 -ios_version_min 8.0 -syslibroot $SDK -lc++ -lc++abi -lgcc_s.1" \
             -DRETRO_USE_MOD_LOADER=OFF \
             -DRETRO_SDL_VERSION=2 \
