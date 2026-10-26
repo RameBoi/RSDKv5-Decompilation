@@ -22,7 +22,7 @@ jobs:
         run: |
           git clone --depth=1 https://github.com/theos/sdks
           sudo apt-get update -qq
-          sudo apt-get install -y -qq libc++-18-dev libc++abi-18-dev cmake ninja-build dpkg
+          sudo apt-get install -y -qq libc++-18-dev libc++abi-18-dev cmake ninja-build dpkg zip
 
       - name: Create Compatibility Stubs & iOS CMake Platform File
         run: |
@@ -74,44 +74,43 @@ jobs:
           cat > platforms/iOS.cmake <<'EOF'
           set(RETRO_SUBSYSTEM "SDL2" CACHE STRING "Subsystem" FORCE)
 
-          set(RETRO_FILES
-              "RSDKv5/main.cpp"
-              "RSDKv5/RSDK/Core/RetroEngine.cpp"
-              "RSDKv5/RSDK/Core/Math.cpp"
-              "RSDKv5/RSDK/Core/Reader.cpp"
-              "RSDKv5/RSDK/Core/Link.cpp"
-              "RSDKv5/RSDK/Core/ModAPI.cpp"
-              "RSDKv5/RSDK/Dev/Debug.cpp"
-              "RSDKv5/RSDK/Storage/Storage.cpp"
-              "RSDKv5/RSDK/Storage/Text.cpp"
-              "RSDKv5/RSDK/Graphics/Drawing.cpp"
-              "RSDKv5/RSDK/Graphics/Scene3D.cpp"
-              "RSDKv5/RSDK/Graphics/Animation.cpp"
-              "RSDKv5/RSDK/Graphics/Sprite.cpp"
-              "RSDKv5/RSDK/Graphics/Palette.cpp"
-              "RSDKv5/RSDK/Graphics/Video.cpp"
-              "RSDKv5/RSDK/Audio/Audio.cpp"
-              "RSDKv5/RSDK/Input/Input.cpp"
-              "RSDKv5/RSDK/Scene/Scene.cpp"
-              "RSDKv5/RSDK/Scene/Collision.cpp"
-              "RSDKv5/RSDK/Scene/Object.cpp"
-              "RSDKv5/RSDK/Scene/Objects/DefaultObject.cpp"
-              "RSDKv5/RSDK/Scene/Objects/DevOutput.cpp"
-              "RSDKv5/RSDK/User/Core/UserAchievements.cpp"
-              "RSDKv5/RSDK/User/Core/UserCore.cpp"
-              "RSDKv5/RSDK/User/Core/UserLeaderboards.cpp"
-              "RSDKv5/RSDK/User/Core/UserPresence.cpp"
-              "RSDKv5/RSDK/User/Core/UserStats.cpp"
-              "RSDKv5/RSDK/User/Core/UserStorage.cpp"
-              "dependencies/all/tinyxml2/tinyxml2.cpp"
-              "dependencies/all/iniparser/iniparser.cpp"
-              "dependencies/all/iniparser/dictionary.cpp"
-              "RSDKv5/RSDK/Graphics/SDL2/SDL2RenderDevice.cpp"
-              "RSDKv5/RSDK/Audio/SDL2/SDL2AudioDevice.cpp"
-              "RSDKv5/RSDK/Input/SDL2/SDL2InputDevice.cpp"
-              "RSDKv5/RSDK/User/Dummy/UserDummy.cpp"
-              "${CMAKE_SOURCE_DIR}/stubs.cpp"
+          file(GLOB_RECURSE ALL_ENGINE_SOURCES 
+              "RSDKv5/*.cpp" "RSDKv5/*.c" "RSDKv5/*.mm"
           )
+          file(GLOB_RECURSE ALL_DEP_SOURCES
+              "dependencies/all/*.cpp" "dependencies/all/*.c"
+          )
+
+          set(RETRO_FILES "")
+          foreach(src IN LISTS ALL_ENGINE_SOURCES ALL_DEP_SOURCES)
+              if(NOT src MATCHES "/NX/" AND 
+                 NOT src MATCHES "/MiniAudio/" AND 
+                 NOT src MATCHES "/WASAPI/" AND 
+                 NOT src MATCHES "/XAudio/" AND 
+                 NOT src MATCHES "/DSound/" AND 
+                 NOT src MATCHES "/ALSA/" AND 
+                 NOT src MATCHES "/PulseAudio/" AND 
+                 NOT src MATCHES "/DX11/" AND 
+                 NOT src MATCHES "/DX9/" AND 
+                 NOT src MATCHES "/D3D11/" AND 
+                 NOT src MATCHES "/OpenGL3/" AND 
+                 NOT src MATCHES "/GL3/" AND 
+                 NOT src MATCHES "/GLFW/" AND 
+                 NOT src MATCHES "/SDL1/" AND 
+                 NOT src MATCHES "/Vulkan/" AND 
+                 NOT src MATCHES "/DInput/" AND 
+                 NOT src MATCHES "/XInput/" AND 
+                 NOT src MATCHES "/RawInput/" AND 
+                 NOT src MATCHES "/WinInput/" AND 
+                 NOT src MATCHES "/Steam/" AND 
+                 NOT src MATCHES "/EOS/" AND 
+                 NOT src MATCHES "/Origin/" AND 
+                 NOT src MATCHES "/Audio/Legacy/")
+                  list(APPEND RETRO_FILES "${src}")
+              endif()
+          endforeach()
+
+          list(APPEND RETRO_FILES "${CMAKE_SOURCE_DIR}/stubs.cpp")
 
           add_subdirectory(dependencies/ios/SDL EXCLUDE_FROM_ALL)
 
@@ -179,9 +178,9 @@ jobs:
             -DCMAKE_CXX_COMPILER=clang++ \
             -DCMAKE_OBJC_COMPILER=clang \
             -DCMAKE_C_FLAGS="--target=armv7-apple-ios8.0 -isysroot $SDK -I$STUBS -include $STUBS/iOS11_Stubs.h -fno-exceptions -Wno-error -Wno-implicit-function-declaration -Wno-int-conversion -Wno-incompatible-pointer-types -Wno-deprecated-declarations -std=gnu99" \
-            -DCMAKE_CXX_FLAGS="--target=armv7-apple-ios8.0 -isysroot $SDK -I$STUBS -I/usr/lib/llvm-18/include/c++/v1 -fno-exceptions -Wno-error -Wno-deprecated-declarations -x objective-c++" \
+            -DCMAKE_CXX_FLAGS="--target=armv7-apple-ios8.0 -isysroot $SDK -I$STUBS -include $STUBS/iOS11_Stubs.h -I/usr/lib/llvm-18/include/c++/v1 -fno-exceptions -Wno-error -Wno-deprecated-declarations -Wno-objc-method-access -x objective-c++" \
             -DCMAKE_OBJC_FLAGS="--target=armv7-apple-ios8.0 -isysroot $SDK -I$STUBS -include $STUBS/iOS11_Stubs.h -Wno-error -Wno-implicit-function-declaration -Wno-int-conversion -Wno-incompatible-pointer-types -Wno-deprecated-declarations -Wno-objc-method-access" \
-            -DCMAKE_EXE_LINKER_FLAGS="-arch armv7 -ios_version_min 8.0 -syslibroot $SDK -lc++ -lc++abi -lgcc_s.1" \
+            -DCMAKE_EXE_LINKER_FLAGS="--target=armv7-apple-ios8.0 -isysroot $SDK -miphoneos-version-min=8.0 -lc++ -lc++abi -lgcc_s.1" \
             -DRETRO_USE_MOD_LOADER=OFF \
             -DRETRO_SDL_VERSION=2 \
             -DSDL_SHARED=OFF \
@@ -189,17 +188,73 @@ jobs:
 
           make -j$(nproc)
 
-      - name: Create DEB Package
+      - name: Assemble App Bundle, IPA & DEB Packages
         run: |
+          # 1. Construct .app bundle
+          APP_DIR="build/RSDKv5U.app"
+          mkdir -p "$APP_DIR"
+          cp build/RetroEngine "$APP_DIR/RSDKv5U"
+          chmod +x "$APP_DIR/RSDKv5U"
+
+          # 2. Generate Info.plist for iOS 8.4.1 armv7
+          cat > "$APP_DIR/Info.plist" <<'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleDevelopmentRegion</key>
+              <string>en</string>
+              <key>CFBundleExecutable</key>
+              <string>RSDKv5U</string>
+              <key>CFBundleIdentifier</key>
+              <string>com.rameboi.sonicmania</string>
+              <key>CFBundleInfoDictionaryVersion</key>
+              <string>6.0</string>
+              <key>CFBundleName</key>
+              <string>Sonic Mania</string>
+              <key>CFBundlePackageType</key>
+              <string>APPL</string>
+              <key>CFBundleShortVersionString</key>
+              <string>1.0.0</string>
+              <key>CFBundleVersion</key>
+              <string>1</string>
+              <key>LSRequiresIPhoneOS</key>
+              <true/>
+              <key>MinimumOSVersion</key>
+              <string>8.0</string>
+              <key>UIDeviceFamily</key>
+              <array>
+                  <integer>1</integer>
+                  <integer>2</integer>
+              </array>
+              <key>UIRequiredDeviceCapabilities</key>
+              <array>
+                  <string>armv7</string>
+              </array>
+              <key>UISupportedInterfaceOrientations</key>
+              <array>
+                  <string>UIInterfaceOrientationLandscapeLeft</string>
+                  <string>UIInterfaceOrientationLandscapeRight</string>
+              </array>
+          </dict>
+          </plist>
+          EOF
+
+          # 3. Create .ipa package
+          mkdir -p build/Payload
+          cp -r "$APP_DIR" build/Payload/
+          cd build && zip -r SonicMania_iOS8.ipa Payload && cd ..
+
+          # 4. Create .deb package
           mkdir -p deb_pkg/DEBIAN deb_pkg/Applications
-          cp -r build/*.app deb_pkg/Applications/ 2>/dev/null || cp -r build/RSDKv5U.app deb_pkg/Applications/
+          cp -r "$APP_DIR" deb_pkg/Applications/
           
           cat > deb_pkg/DEBIAN/control <<'EOF'
           Package: com.rameboi.sonicmania
           Name: Sonic Mania
           Version: 1.0.0
           Architecture: iphoneos-arm
-          Description: Sonic Mania (RSDKv5) engine for iOS 8.4.1
+          Description: Sonic Mania (RSDKv5) engine port for iOS 8.4.1 (armv7)
           Maintainer: RameBoi
           Author: RameBoi
           Section: Games
@@ -208,7 +263,7 @@ jobs:
 
           cat > deb_pkg/DEBIAN/postinst <<'EOF'
           #!/bin/sh
-          chmod -R 755 /Applications/*.app
+          chmod -R 755 /Applications/RSDKv5U.app
           uicache
           exit 0
           EOF
@@ -222,6 +277,5 @@ jobs:
           name: SonicMania-iOS8-armv7
           path: |
             build/*.app
+            build/*.ipa
             build/*.deb
-            build/RSDKv5*
-            build/RetroEngine*
