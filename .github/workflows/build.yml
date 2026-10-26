@@ -15,16 +15,16 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Install Theos
+      - name: Install Theos & Tools
         uses: Randomblock1/theos-action@v1
 
-      - name: Get SDKs and Toolchain Dependencies
+      - name: Get SDKs and Dependencies
         run: |
           git clone --depth=1 https://github.com/theos/sdks
           sudo apt-get update -qq
           sudo apt-get install -y -qq libc++-18-dev libc++abi-18-dev cmake ninja-build
 
-      - name: Create Compatibility Stubs
+      - name: Create Compatibility Stubs & iOS CMake Platform File
         run: |
           cat > stubs.cpp <<'EOF'
           extern "C" void abort(void);
@@ -45,14 +45,64 @@ jobs:
           } }
           EOF
 
+          mkdir -p platforms
+          cat > platforms/iOS.cmake <<'EOF'
+          file(GLOB_RECURSE ENGINE_SOURCES 
+              "RSDKv5/*.cpp" "RSDKv5/*.c" "RSDKv5/*.mm"
+          )
+          file(GLOB_RECURSE GAME_SOURCES 
+              "Game/SonicMania/*.cpp" "Game/SonicMania/*.c"
+          )
+
+          add_subdirectory(dependencies/ios/SDL EXCLUDE_FROM_ALL)
+
+          add_executable(RetroEngine ${ENGINE_SOURCES} ${GAME_SOURCES} ${CMAKE_SOURCE_DIR}/stubs.cpp)
+
+          target_compile_definitions(RetroEngine PRIVATE
+              RETRO_REV02=1
+              RETRO_USING_SDL2=1
+              GLES_SILENCE_DEPRECATION=1
+          )
+
+          target_include_directories(RetroEngine PRIVATE
+              RSDKv5
+              Game/SonicMania
+              dependencies/ios/SDL/include
+              dependencies/all/tinyxml2
+              dependencies/all/stb_vorbis
+              dependencies/ios/ogg/include
+              dependencies/ios/vorbis/include
+              dependencies/ios/theora/include
+          )
+
+          find_library(UIKIT_LIB UIKit)
+          find_library(FOUNDATION_LIB Foundation)
+          find_library(OPENGLES_LIB OpenGLES)
+          find_library(QUARTZ_LIB QuartzCore)
+          find_library(AUDIOTB_LIB AudioToolbox)
+          find_library(AVFOUNDATION_LIB AVFoundation)
+          find_library(GAMECONTROLLER_LIB GameController)
+          find_library(COREGRAPHICS_LIB CoreGraphics)
+
+          target_link_libraries(RetroEngine PRIVATE
+              SDL2-static
+              ${UIKIT_LIB}
+              ${FOUNDATION_LIB}
+              ${OPENGLES_LIB}
+              ${QUARTZ_LIB}
+              ${AUDIOTB_LIB}
+              ${AVFOUNDATION_LIB}
+              ${GAMECONTROLLER_LIB}
+              ${COREGRAPHICS_LIB}
+          )
+          EOF
+
       - name: Configure and Build Engine & Game
         run: |
           SDK=$PWD/sdks/iPhoneOS10.3.sdk
-          THEOS_LD=$GITHUB_WORKSPACE/theos/toolchain/linux/iphone/bin/ld
           
           mkdir -p build && cd build
           
-          # Run CMake with custom toolchain flags targeting iOS 8 armv7
           cmake .. \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_SYSROOT=$SDK \
@@ -74,4 +124,4 @@ jobs:
           path: |
             build/*.app
             build/RSDKv5*
-            build/SonicMania*
+            build/RetroEngine*
