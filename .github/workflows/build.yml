@@ -74,10 +74,6 @@ jobs:
           cat > platforms/iOS.cmake <<'EOF'
           set(RETRO_SUBSYSTEM "SDL2" CACHE STRING "Subsystem" FORCE)
 
-          # Globally enforce stubs and warning suppressions across all subdirectories
-          add_compile_options(-include ${CMAKE_SOURCE_DIR}/stubs/iOS11_Stubs.h)
-          add_compile_options(-Wno-error -Wno-objc-method-access -Wno-deprecated-declarations)
-
           file(GLOB_RECURSE ALL_ENGINE_SOURCES 
               "RSDKv5/*.cpp" "RSDKv5/*.c" "RSDKv5/*.mm"
           )
@@ -112,7 +108,7 @@ jobs:
                  NOT src MATCHES "/Steam/" AND 
                  NOT src MATCHES "/EOS/" AND 
                  NOT src MATCHES "/Origin/" AND 
-                 NOT src MATCHES "/Audio/Legacy/" AND 
+                 NOT src MATCHES "/Legacy/" AND 
                  NOT src MATCHES "/Audio/Dummy/" AND 
                  NOT src MATCHES "/Input/Dummy/")
                   list(APPEND RETRO_FILES "${src}")
@@ -122,6 +118,10 @@ jobs:
           list(APPEND RETRO_FILES "${CMAKE_SOURCE_DIR}/stubs.cpp")
 
           add_subdirectory(dependencies/ios/SDL EXCLUDE_FROM_ALL)
+
+          if(TARGET SDL2-static)
+              target_compile_options(SDL2-static PRIVATE -include ${CMAKE_SOURCE_DIR}/stubs/iOS11_Stubs.h -Wno-objc-method-access)
+          endif()
 
           find_library(UIKIT_LIB UIKit)
           find_library(FOUNDATION_LIB Foundation)
@@ -137,7 +137,7 @@ jobs:
           add_executable(RetroEngine ${RETRO_FILES} ${GAME_SOURCES})
 
           target_compile_definitions(RetroEngine PRIVATE
-              RETRO_REVISION=3
+              RETRO_REV02=1
               RETRO_USING_SDL2=1
               RSDK_USE_SDL2=1
               GLES_SILENCE_DEPRECATION=1
@@ -186,9 +186,10 @@ jobs:
             -DCMAKE_C_COMPILER=clang \
             -DCMAKE_CXX_COMPILER=clang++ \
             -DCMAKE_OBJC_COMPILER=clang \
-            -DCMAKE_C_FLAGS="--target=armv7-apple-ios8.0 -isysroot $SDK -I$STUBS -include $STUBS/iOS11_Stubs.h -fno-exceptions -Wno-error -Wno-implicit-function-declaration -Wno-int-conversion -Wno-incompatible-pointer-types -Wno-deprecated-declarations -std=gnu99" \
-            -DCMAKE_CXX_FLAGS="--target=armv7-apple-ios8.0 -isysroot $SDK -I$STUBS -I/usr/lib/llvm-18/include/c++/v1 -fno-exceptions -Wno-error -Wno-deprecated-declarations" \
+            -DCMAKE_C_FLAGS="--target=armv7-apple-ios8.0 -isysroot $SDK -I$STUBS -fno-exceptions -Wno-error -Wno-implicit-function-declaration -Wno-int-conversion -Wno-incompatible-pointer-types -Wno-deprecated-declarations -std=gnu99" \
+            -DCMAKE_CXX_FLAGS="--target=armv7-apple-ios8.0 -isysroot $SDK -I$STUBS -I/usr/lib/llvm-18/include/c++/v1 -fno-exceptions -Wno-error -Wno-deprecated-declarations -std=c++11" \
             -DCMAKE_OBJC_FLAGS="--target=armv7-apple-ios8.0 -isysroot $SDK -I$STUBS -include $STUBS/iOS11_Stubs.h -Wno-error -Wno-implicit-function-declaration -Wno-int-conversion -Wno-incompatible-pointer-types -Wno-deprecated-declarations -Wno-objc-method-access" \
+            -DCMAKE_OBJCXX_FLAGS="--target=armv7-apple-ios8.0 -isysroot $SDK -I$STUBS -include $STUBS/iOS11_Stubs.h -I/usr/lib/llvm-18/include/c++/v1 -fno-exceptions -Wno-error -Wno-deprecated-declarations -Wno-objc-method-access" \
             -DCMAKE_EXE_LINKER_FLAGS="--target=armv7-apple-ios8.0 -isysroot $SDK -miphoneos-version-min=8.0 -lc++ -lc++abi -lgcc_s.1" \
             -DRETRO_USE_MOD_LOADER=OFF \
             -DRETRO_SDL_VERSION=2 \
