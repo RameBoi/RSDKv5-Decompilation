@@ -6,14 +6,24 @@ jobs:
   recon:
     runs-on: ubuntu-latest
     steps:
+      - name: Install Theos
+        uses: Randomblock1/theos-action@v1
+      - name: Show toolchain
+        run: |
+          export THEOS=${THEOS:-$HOME/theos}
+          echo "THEOS=$THEOS"
+          find $THEOS/toolchain -maxdepth 4 \( -name 'clang*' -o -name 'ld*' \) | head -30
       - name: Get iOS 9.3 SDK and C++ headers
         run: |
           git clone --depth=1 https://github.com/theos/sdks
           sudo apt-get update
           sudo apt-get install -y libc++-18-dev libc++abi-18-dev
-          ls /usr/lib/llvm-18/include/c++/v1 | head -5
-      - name: Compile test program
+      - name: Compile and link with Theos toolchain
         run: |
+          export THEOS=${THEOS:-$HOME/theos}
+          TC=$(dirname "$(find $THEOS/toolchain -name clang -type f | head -1)")
+          echo "Using toolchain in $TC"
+          ls $TC
           cat > hello.cpp <<'EOF'
           #include <iostream>
           #include <string>
@@ -25,12 +35,8 @@ jobs:
           }
           EOF
           SDK=$PWD/sdks/iPhoneOS9.3.sdk
-          clang++ --target=armv7-apple-ios8.0 -isysroot $SDK -nostdinc++ -isystem /usr/lib/llvm-18/include/c++/v1 -std=c++11 -c hello.cpp -o hello.o
-          file hello.o
-      - name: Link test program
-        run: |
-          SDK=$PWD/sdks/iPhoneOS9.3.sdk
-          clang++ --target=armv7-apple-ios8.0 -isysroot $SDK -nostdlib++ -fuse-ld=/usr/bin/ld64.lld-18 hello.o -lc++ -o hello
+          $TC/clang++ --target=armv7-apple-ios8.0 -isysroot $SDK -nostdinc++ -isystem /usr/lib/llvm-18/include/c++/v1 -std=c++11 -c hello.cpp -o hello.o
+          $TC/clang++ --target=armv7-apple-ios8.0 -isysroot $SDK -nostdlib++ hello.o -lc++ -o hello
           file hello
       - name: Check minimum iOS version
         run: |
