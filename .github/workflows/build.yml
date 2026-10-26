@@ -24,16 +24,18 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq libc++-18-dev libc++abi-18-dev cmake ninja-build dpkg zip
 
-      - name: Create Stubs & iOS CMake Platform Script
+      - name: Create Compatibility Stubs & iOS Platform Config
         run: |
           mkdir -p stubs
           
+          # Header stub for missing AvailabilityVersions.h in iOS 10.3 SDK
           cat > stubs/AvailabilityVersions.h <<'EOF'
           #ifndef _AVAILABILITY_VERSIONS_H_
           #define _AVAILABILITY_VERSIONS_H_
           #endif
           EOF
 
+          # Objective-C category stub for iOS 11+ UIViewController methods missing in iOS 10.3 SDK
           cat > stubs/iOS11_Stubs.h <<'EOF'
           #ifndef IOS11_STUBS_H
           #define IOS11_STUBS_H
@@ -49,6 +51,7 @@ jobs:
           #endif
           EOF
 
+          # C++ runtime stubs for missing libcpp abort symbol and integer division
           cat > stubs.cpp <<'EOF'
           extern "C" void abort(void);
           extern "C" int __divsi3(int a, int b) {
@@ -72,63 +75,16 @@ jobs:
           cat > platforms/iOS.cmake <<'EOF'
           set(RETRO_SUBSYSTEM "SDL2" CACHE STRING "Subsystem" FORCE)
 
-          if(EXISTS "${CMAKE_SOURCE_DIR}/RSDKv5/main.cpp")
-              set(RSDK_DIR "${CMAKE_SOURCE_DIR}/RSDKv5")
-          elseif(EXISTS "${CMAKE_SOURCE_DIR}/Game/dependencies/RSDKv5/main.cpp")
-              set(RSDK_DIR "${CMAKE_SOURCE_DIR}/Game/dependencies/RSDKv5")
-          else()
-              set(RSDK_DIR "${CMAKE_SOURCE_DIR}/RSDKv5")
-          endif()
-
-          file(GLOB_RECURSE ALL_ENGINE_SOURCES 
-              "${RSDK_DIR}/*.cpp" 
-              "${RSDK_DIR}/*.c" 
-              "${RSDK_DIR}/*.mm"
+          # Add only SDL2 backend files to RETRO_FILES
+          list(APPEND RETRO_FILES
+              "RSDKv5/RSDK/Graphics/SDL2/SDL2RenderDevice.cpp"
+              "RSDKv5/RSDK/Audio/SDL2/SDL2AudioDevice.cpp"
+              "RSDKv5/RSDK/Input/SDL2/SDL2InputDevice.cpp"
+              "RSDKv5/RSDK/User/Dummy/UserDummy.cpp"
+              "${CMAKE_SOURCE_DIR}/stubs.cpp"
           )
-          file(GLOB_RECURSE ALL_DEP_SOURCES
-              "${CMAKE_SOURCE_DIR}/dependencies/all/*.cpp" 
-              "${CMAKE_SOURCE_DIR}/dependencies/all/*.c"
-          )
-
-          set(RETRO_FILES "")
-          foreach(src IN LISTS ALL_ENGINE_SOURCES ALL_DEP_SOURCES)
-              if(NOT src MATCHES "/NX/" AND 
-                 NOT src MATCHES "/MiniAudio/" AND 
-                 NOT src MATCHES "/PortAudio/" AND 
-                 NOT src MATCHES "/Oboe/" AND 
-                 NOT src MATCHES "/WASAPI/" AND 
-                 NOT src MATCHES "/XAudio/" AND 
-                 NOT src MATCHES "/FAudio/" AND 
-                 NOT src MATCHES "/DSound/" AND 
-                 NOT src MATCHES "/ALSA/" AND 
-                 NOT src MATCHES "/PulseAudio/" AND 
-                 NOT src MATCHES "/DX11/" AND 
-                 NOT src MATCHES "/DX9/" AND 
-                 NOT src MATCHES "/D3D11/" AND 
-                 NOT src MATCHES "/OpenGL3/" AND 
-                 NOT src MATCHES "/GL3/" AND 
-                 NOT src MATCHES "/GLFW/" AND 
-                 NOT src MATCHES "/SDL1/" AND 
-                 NOT src MATCHES "/Vulkan/" AND 
-                 NOT src MATCHES "/DInput/" AND 
-                 NOT src MATCHES "/XInput/" AND 
-                 NOT src MATCHES "/RawInput/" AND 
-                 NOT src MATCHES "/WinInput/" AND 
-                 NOT src MATCHES "/Steam/" AND 
-                 NOT src MATCHES "/EOS/" AND 
-                 NOT src MATCHES "/Origin/" AND 
-                 NOT src MATCHES "/Legacy/")
-                  list(APPEND RETRO_FILES "${src}")
-              endif()
-          endforeach()
-
-          list(APPEND RETRO_FILES "${CMAKE_SOURCE_DIR}/stubs.cpp")
 
           add_subdirectory(dependencies/ios/SDL EXCLUDE_FROM_ALL)
-
-          if(TARGET SDL2-static)
-              target_compile_options(SDL2-static PRIVATE -include ${CMAKE_SOURCE_DIR}/stubs/iOS11_Stubs.h -Wno-objc-method-access)
-          endif()
 
           find_library(UIKIT_LIB UIKit)
           find_library(FOUNDATION_LIB Foundation)
@@ -139,24 +95,7 @@ jobs:
           find_library(GAMECONTROLLER_LIB GameController)
           find_library(COREGRAPHICS_LIB CoreGraphics)
 
-          file(GLOB_RECURSE GAME_SOURCES 
-              "${CMAKE_SOURCE_DIR}/Game/SonicMania/*.cpp" 
-              "${CMAKE_SOURCE_DIR}/Game/SonicMania/*.c"
-          )
-
-          add_executable(RetroEngine ${RETRO_FILES} ${GAME_SOURCES})
-
-          target_compile_definitions(RetroEngine PRIVATE
-              RETRO_REV02=1
-              RETRO_USING_SDL2=1
-              RSDK_USE_SDL2=1
-              GLES_SILENCE_DEPRECATION=1
-          )
-
-          target_include_directories(RetroEngine PRIVATE
-              ${RSDK_DIR}
-              ${RSDK_DIR}/RSDK
-              ${CMAKE_SOURCE_DIR}/Game/SonicMania
+          include_directories(
               ${CMAKE_SOURCE_DIR}/dependencies/ios/SDL/include
               ${CMAKE_SOURCE_DIR}/dependencies/all
               ${CMAKE_SOURCE_DIR}/dependencies/all/tinyxml2
@@ -167,7 +106,7 @@ jobs:
               ${CMAKE_SOURCE_DIR}/dependencies/ios/theora/include
           )
 
-          target_link_libraries(RetroEngine PRIVATE
+          link_libraries(
               SDL2-static
               ${UIKIT_LIB}
               ${FOUNDATION_LIB}
@@ -202,7 +141,6 @@ jobs:
             -DCMAKE_OBJCXX_FLAGS="--target=armv7-apple-ios8.0 -isysroot $SDK -I$STUBS -include $STUBS/iOS11_Stubs.h -I/usr/lib/llvm-18/include/c++/v1 -fno-exceptions -Wno-error -Wno-deprecated-declarations -Wno-objc-method-access" \
             -DCMAKE_EXE_LINKER_FLAGS="--target=armv7-apple-ios8.0 -isysroot $SDK -miphoneos-version-min=8.0 -lc++ -lc++abi -lgcc_s.1" \
             -DRETRO_USE_MOD_LOADER=OFF \
-            -DRETRO_SDL_VERSION=2 \
             -DSDL_SHARED=OFF \
             -DSDL_STATIC=ON
 
@@ -212,9 +150,16 @@ jobs:
         run: |
           APP_DIR="build/RSDKv5U.app"
           mkdir -p "$APP_DIR"
-          cp build/RetroEngine "$APP_DIR/RSDKv5U"
+          
+          # Copy compiled binary into app bundle
+          if [ -f "build/RetroEngine" ]; then
+              cp build/RetroEngine "$APP_DIR/RSDKv5U"
+          elif [ -f "build/RSDKv5U" ]; then
+              cp build/RSDKv5U "$APP_DIR/RSDKv5U"
+          fi
           chmod +x "$APP_DIR/RSDKv5U"
 
+          # Generate iOS 8 Info.plist
           cat > "$APP_DIR/Info.plist" <<'EOF'
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -258,10 +203,12 @@ jobs:
           </plist>
           EOF
 
+          # Package .ipa for sideloading
           mkdir -p build/Payload
           cp -r "$APP_DIR" build/Payload/
           cd build && zip -r SonicMania_iOS8.ipa Payload && cd ..
 
+          # Package .deb for jailbreak deployment
           mkdir -p deb_pkg/DEBIAN deb_pkg/Applications
           cp -r "$APP_DIR" deb_pkg/Applications/
           
