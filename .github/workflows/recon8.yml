@@ -1,0 +1,20 @@
+name: recon8
+on:
+  push:
+    branches: [ios]
+jobs:
+  recon8:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: RECON8 mods and filesystem use
+        run: |
+          echo "=== ios README"; head -40 dependencies/ios/README.md || true
+          echo "=== Data/mods"; find Data/mods | head -30 || true
+          echo "=== Mods (top 3 levels)"; find Mods -maxdepth 3 | head -30 || true
+          echo "=== touch names in engine and game"; grep -rn -i "touchcontrol\|TOUCH_CONTROL\|drawtouch\|onscreen\|virtualpad" RSDKv5 Game/SonicMania --include=*.cpp --include=*.hpp --include=*.mm --include=*.c --include=*.h | cut -c1-180 | head -25 || true
+          echo "=== fs:: uses in ModAPI.cpp (count)"; grep -c "fs::" RSDKv5/RSDK/Core/ModAPI.cpp || true
+          echo "=== fs:: uses in ModAPI.cpp (lines)"; grep -n "fs::\|<filesystem>" RSDKv5/RSDK/Core/ModAPI.cpp | cut -c1-170 | head -60 || true
+          echo "=== other files using filesystem"; grep -rln "std::filesystem\|<filesystem>" RSDKv5 Game/SonicMania | head || true
