@@ -1,0 +1,17 @@
+name: recon10
+on:
+  push:
+    branches: [ios]
+jobs:
+  recon10:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: RECON10 input and touch code
+        run: |
+          echo "=== ControllerState struct"; grep -n -B2 -A28 "struct ControllerState" RSDKv5/RSDK/Input/Input.hpp || true
+          echo "=== functions in Input.cpp"; grep -n "^void RSDK::\|^bool32 RSDK::\|^int32 RSDK::\|^void RSDK::SKU" RSDKv5/RSDK/Input/Input.cpp | head -40 || true
+          echo "=== ProcessInput"; grep -A60 "^void RSDK::ProcessInput" RSDKv5/RSDK/Input/Input.cpp | cut -c1-170 || true
+          echo "=== touchInfo uses"; grep -rn "touchInfo" RSDKv5/RSDK --include=*.cpp --include=*.hpp | cut -c1-170 | head -30 || true
+          echo "=== SDL2 render device events"; sed -n 640,800p RSDKv5/RSDK/Graphics/SDL2/SDL2RenderDevice.cpp | cut -c1-170 || true
+          echo "=== SDL2 present calls"; grep -n "SDL_RenderPresent\|SDL_RenderCopy\|SDL_UpdateTexture\|SDL_RenderClear\|SDL_SetRenderDrawColor\|void RenderDevice::" RSDKv5/RSDK/Graphics/SDL2/SDL2RenderDevice.cpp | cut -c1-150 | head -40 || true
