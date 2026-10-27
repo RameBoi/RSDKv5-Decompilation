@@ -52,7 +52,7 @@ jobs:
               hpp = hpp.replace("struct ControllerState {", "void IOSTouchUpdate();\nstruct ControllerState {")
               open(hpp_path, "w").write(hpp)
 
-          # 2. Update Input.cpp (Appended inside namespace RSDK after all headers are loaded)
+          # 2. Update Input.cpp (Appended inside namespace RSDK after headers are loaded)
           cpp_path = base + "Input/Input.cpp"
           cpp = open(cpp_path, "r").read()
 
@@ -307,6 +307,8 @@ jobs:
           mkdir -p $APP
           cp "$BIN" $APP/RSDKv5U
           cp dependencies/ios/Default.png $APP/ 2>/dev/null || true
+          
+          # Fully specified Info.plist for iOS 8 & Filza recognition
           cat > $APP/Info.plist <<'EOF'
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -318,21 +320,44 @@ jobs:
               <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
               <key>CFBundleName</key><string>Sonic Mania</string>
               <key>CFBundlePackageType</key><string>APPL</string>
+              <key>CFBundleSignature</key><string>????</string>
               <key>CFBundleShortVersionString</key><string>1.0.0</string>
-              <key>CFBundleVersion</key><string>1</string>
+              <key>CFBundleVersion</key><string>1.0.0</string>
+              <key>CFBundleSupportedPlatforms</key>
+              <array>
+                  <string>iPhoneOS</string>
+              </array>
+              <key>DTPlatformName</key><string>iphoneos</string>
+              <key>DTSDKName</key><string>iphoneos10.3</string>
               <key>LSRequiresIPhoneOS</key><true/>
               <key>MinimumOSVersion</key><string>8.0</string>
-              <key>UIDeviceFamily</key><array><integer>1</integer><integer>2</integer></array>
-              <key>UIRequiredDeviceCapabilities</key><array><string>armv7</string><string>opengles-2</string></array>
-              <key>UISupportedInterfaceOrientations</key><array><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>
+              <key>UIDeviceFamily</key>
+              <array>
+                  <integer>1</integer>
+                  <integer>2</integer>
+              </array>
+              <key>UIRequiredDeviceCapabilities</key>
+              <array>
+                  <string>armv7</string>
+                  <string>opengles-2</string>
+              </array>
+              <key>UISupportedInterfaceOrientations</key>
+              <array>
+                  <string>UIInterfaceOrientationLandscapeLeft</string>
+                  <string>UIInterfaceOrientationLandscapeRight</string>
+              </array>
               <key>UIStatusBarHidden</key><true/>
               <key>UIRequiresFullScreen</key><true/>
           </dict>
           EOF
+
           $GITHUB_WORKSPACE/theos/toolchain/linux/iphone/bin/ldid -S $APP/RSDKv5U
           (cd out && zip -qr SonicMania_iOS8.ipa Payload)
+
+          # Prepare DEB package structure
           mkdir -p deb/Applications deb/DEBIAN
           cp -r $APP deb/Applications/
+
           cat > deb/DEBIAN/control <<'EOF'
           Package: com.rameboi.sonicmania
           Name: Sonic Mania
@@ -343,9 +368,12 @@ jobs:
           Section: Games
           Depends: firmware (>= 8.0)
           EOF
+
           printf '#!/bin/sh\nchmod -R 755 /Applications/RSDKv5U.app\nuicache\nexit 0\n' > deb/DEBIAN/postinst
           chmod 755 deb/DEBIAN/postinst
-          dpkg-deb -b deb out/SonicMania_iOS8.deb
+
+          # Force legacy gzip compression so Filza on iOS 8 doesn't crash on zstd
+          dpkg-deb -Zgzip -b deb out/SonicMania_iOS8.deb
 
       - name: Upload build files
         uses: actions/upload-artifact@v4
