@@ -41,7 +41,7 @@ jobs:
       - name: Inject Touch Controls & Analog Joystick
         run: |
           python3 - <<'PY'
-          import os
+          import re, os
 
           base = "Game/dependencies/RSDKv5/RSDKv5/RSDK/"
 
@@ -53,15 +53,14 @@ jobs:
           void IOSTouchUpdate();
           """
           if "IOSTouchUpdate" not in hpp:
-              hpp = hpp.replace("struct ControllerState {", decl + "\nstruct ControllerState {")
+              hpp = re.sub(r"(struct\s+ControllerState\s*\{)", decl + r"\n\1", hpp, count=1)
               open(hpp_path, "w").write(hpp)
 
-          # 2. Update Input.cpp
+          # 2. Update Input.cpp (Inserted AFTER includes so bool32/int32 are defined)
           cpp_path = base + "Input/Input.cpp"
           cpp = open(cpp_path, "r").read()
           
-          logic = """#include <math.h>
-
+          logic = """
           namespace RSDK {
           bool32 iosTouchLeft  = false;
           bool32 iosTouchRight = false;
@@ -136,14 +135,14 @@ jobs:
                       if (dy > 0.025f)  iosTouchDown  = true;
                   }
 
-                  // 2. Jump Button (Bottom Right)
+                  // 2. Jump / Confirm Button (Bottom Right)
                   float jdx = tx - 0.84f;
                   float jdy = ty - 0.72f;
                   if (sqrtf(jdx * jdx + jdy * jdy) <= 0.15f) {
                       iosTouchJump = true;
                   }
 
-                  // 3. Back Button (Secondary)
+                  // 3. Back / Cancel Button (Secondary)
                   float bdx = tx - 0.72f;
                   float bdy = ty - 0.84f;
                   if (sqrtf(bdx * bdx + bdy * bdy) <= 0.09f) {
@@ -173,16 +172,17 @@ jobs:
           }
           """
 
-          if "IOSTouchUpdate()" not in cpp:
-              cpp = logic + "\n" + cpp
-              cpp = cpp.replace("void RSDK::ProcessInput()\n{", "void RSDK::ProcessInput()\n{\n    IOSTouchUpdate();")
+          if "IOSTouchUpdate" not in cpp:
+              cpp = re.sub(r"(\bvoid\s+(?:RSDK::)?ProcessInput\s*\(\s*\))", logic + r"\n\1", cpp, count=1)
+              cpp = re.sub(r"(\bvoid\s+(?:RSDK::)?ProcessInput\s*\(\s*\)\s*\{)", r"\1\n    IOSTouchUpdate();", cpp, count=1)
               open(cpp_path, "w").write(cpp)
 
-          # 3. Update SDL2RenderDevice.cpp
+          # 3. Update SDL2RenderDevice.cpp (Inserted right before SDL_RenderPresent)
           render_path = base + "Graphics/SDL2/SDL2RenderDevice.cpp"
           render = open(render_path, "r").read()
 
-          render_overlay = """namespace RSDK {
+          render_overlay = """
+          namespace RSDK {
           extern bool32 iosTouchLeft, iosTouchRight, iosTouchUp, iosTouchDown, iosTouchJump, iosTouchBack, iosTouchPause;
           extern float iosJoyKnobX, iosJoyKnobY;
           }
@@ -258,8 +258,7 @@ jobs:
           """
 
           if "RenderIOSTouchOverlay" not in render:
-              render = render_overlay + "\n" + render
-              render = render.replace("SDL_RenderPresent(renderer);", "RenderIOSTouchOverlay(renderer);\n    SDL_RenderPresent(renderer);")
+              render = re.sub(r"(\bSDL_RenderPresent\s*\(\s*renderer\s*\)\s*;)", render_overlay + r"\n    RenderIOSTouchOverlay(renderer);\n\1", render, count=1)
               open(render_path, "w").write(render)
 
           print("Successfully patched touch engine & rendering!")
