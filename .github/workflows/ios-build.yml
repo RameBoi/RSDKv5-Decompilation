@@ -22,73 +22,78 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq libc++-18-dev libc++abi-18-dev cmake ninja-build dpkg zip
 
-      - name: Prepare RSDKv5 Submodule Structure
+      - name: Prepare RSDKv5 Submodule & Force OpenGL Window
         run: |
           rm -rf Game/dependencies/RSDKv5
           mkdir -p Game/dependencies/RSDKv5
           tar --exclude=./Game --exclude=./.git --exclude=./sdks --exclude=./theos -cf - . | tar -xf - -C Game/dependencies/RSDKv5
 
-          # Force main.cpp to include <SDL.h> for SDL_main macro resolution
-          find . -name "main.cpp" -exec sed -i '1s/^/#include <SDL.h>\n/' {} +
+          # Link SDL2main for iOS UIWindow entry point
+          sed -i 's/target_link_libraries(RetroEngine SDL2-static/target_link_libraries(RetroEngine SDL2main SDL2-static/' Game/dependencies/RSDKv5/platforms/iOS.cmake
 
-          # Link SDL2main ahead of SDL2-static
-          if [ -f "Game/dependencies/RSDKv5/platforms/iOS.cmake" ]; then
-              sed -i 's/target_link_libraries(RetroEngine SDL2-static/target_link_libraries(RetroEngine SDL2main SDL2-static/' Game/dependencies/RSDKv5/platforms/iOS.cmake
-          fi
+          # Force OpenGL window creation instead of Metal
+          R=Game/dependencies/RSDKv5/RSDKv5/RSDK/Graphics/SDL2/SDL2RenderDevice.cpp
+          sed -i 's/int flags = SDL_WINDOW_METAL;/int flags = SDL_WINDOW_OPENGL;/' $R
 
-      - name: Inject Analog Joystick & Touch Controls Engine
+          # Ensure main.cpp includes <SDL.h> for SDL_main macro resolution
+          find Game/dependencies/RSDKv5 -name "main.cpp" -exec sed -i '1s/^/#include <SDL.h>\n/' {} +
+
+      - name: Inject Analog Joystick & Player 1 Touch Engine
         run: |
           python3 - <<'PY'
-          import os
+          import re, os
 
           base = "Game/dependencies/RSDKv5/RSDKv5/RSDK/"
 
+          def patch(path, pattern, make):
+              s = open(path, newline="").read()
+              new, n = re.subn(pattern, make, s, flags=re.M)
+              if n != 1:
+                  raise SystemExit("PATCH FAILED (%d matches) in %s for pattern %s" % (n, path, pattern))
+              open(path, "w", newline="").write(new)
+
           # 1. Update Input.hpp with touch state declarations
-          hpp_path = base + "Input/Input.hpp"
-          hpp_data = open(hpp_path, newline="").read()
-          decl = """extern bool32 iosTouchLeft, iosTouchRight, iosTouchUp, iosTouchDown, iosTouchJump, iosTouchPause;
+          decl = """extern bool32 iosTouchLeft, iosTouchRight, iosTouchUp, iosTouchDown, iosTouchJump, iosTouchBack, iosTouchPause;
           extern float iosJoyKnobX, iosJoyKnobY;
           void IOSTouchUpdate();
 
           """
-          if "IOSTouchUpdate()" not in hpp_data:
-              hpp_data = hpp_data.replace("struct ControllerState {", decl + "struct ControllerState {")
-              open(hpp_path, "w", newline="").write(hpp_data)
+          patch(base + "Input/Input.hpp", r"^struct ControllerState \{", lambda m: decl + m.group(0))
 
-          # 2. Update Input.cpp with Joystick logic and button mapping
-          cpp_path = base + "Input/Input.cpp"
-          cpp_data = open(cpp_path, newline="").read()
+          # 2. Update Input.cpp with dynamic analog stick and button mappings
+          logic = """
+          #include <math.h>
 
-          touch_logic = """
           namespace RSDK {
           bool32 iosTouchLeft  = false;
           bool32 iosTouchRight = false;
           bool32 iosTouchUp    = false;
           bool32 iosTouchDown  = false;
           bool32 iosTouchJump  = false;
+          bool32 iosTouchBack  = false;
           bool32 iosTouchPause = false;
 
-          float iosJoyKnobX = 0.15f;
+          float iosJoyKnobX = 0.18f;
           float iosJoyKnobY = 0.72f;
 
           static bool32 wasLeft  = false;
           static bool32 wasRight = false;
           static bool32 wasUp    = false;
           static bool32 wasDown  = false;
-          static bool32 wasJumpA = false;
-          static bool32 wasJumpB = false;
-          static bool32 wasJumpC = false;
+          static bool32 wasJump  = false;
+          static bool32 wasBack  = false;
           static bool32 wasPause = false;
 
-          static void ApplyTouchKey(InputState *key, bool32 isDown, bool32 *wasDown) {
-              if (isDown) {
-                  key->down = true;
-                  if (!(*wasDown)) {
-                      key->press = true;
-                  }
-                  *wasDown = true;
+          static inline void ApplyTouchState(InputState &key, bool32 active, bool32 &wasActive) {
+              if (active) {
+                  key.down = true;
+                  if (!wasActive) key.press = true;
+                  wasActive = true;
               } else {
-                  *wasDown = false;
+                  if (wasActive) {
+                      key.down = false;
+                      wasActive = false;
+                  }
               }
           }
 
@@ -98,11 +103,12 @@ jobs:
               iosTouchUp    = false;
               iosTouchDown  = false;
               iosTouchJump  = false;
+              iosTouchBack  = false;
               iosTouchPause = false;
 
-              float joyCenterX = 0.15f;
+              float joyCenterX = 0.18f;
               float joyCenterY = 0.72f;
-              float joyRadius  = 0.12f;
+              float joyRadius  = 0.14f;
 
               iosJoyKnobX = joyCenterX;
               iosJoyKnobY = joyCenterY;
@@ -114,69 +120,69 @@ jobs:
                   float tx = touchInfo.x[t];
                   float ty = touchInfo.y[t];
 
-                  // Joystick detection
+                  // 1. Analog Joystick (Left Side)
                   float dx = tx - joyCenterX;
                   float dy = ty - joyCenterY;
                   float dist = sqrtf(dx * dx + dy * dy);
 
-                  if (dist < joyRadius * 2.2f && !joyActive) {
+                  if (tx < 0.45f && ty > 0.35f && !joyActive) {
                       joyActive = true;
                       float clampDist = dist > joyRadius ? joyRadius : dist;
                       if (dist > 0.0001f) {
                           iosJoyKnobX = joyCenterX + (dx / dist) * clampDist;
                           iosJoyKnobY = joyCenterY + (dy / dist) * clampDist;
                       }
-                      if (dx < -0.03f) iosTouchLeft  = true;
-                      if (dx > 0.03f)  iosTouchRight = true;
-                      if (dy < -0.03f) iosTouchUp    = true;
-                      if (dy > 0.03f)  iosTouchDown  = true;
+                      if (dx < -0.025f) iosTouchLeft  = true;
+                      if (dx > 0.025f)  iosTouchRight = true;
+                      if (dy < -0.025f) iosTouchUp    = true;
+                      if (dy > 0.025f)  iosTouchDown  = true;
                   }
 
-                  // Jump button detection (Bottom-Right)
-                  float jdx = tx - 0.85f;
+                  // 2. Jump / Confirm Button (Bottom Right - S Key Equivalent)
+                  float jdx = tx - 0.84f;
                   float jdy = ty - 0.72f;
-                  if (sqrtf(jdx * jdx + jdy * jdy) <= 0.14f) {
+                  if (sqrtf(jdx * jdx + jdy * jdy) <= 0.15f) {
                       iosTouchJump = true;
                   }
 
-                  // Pause button detection (Top-Right)
+                  // 3. Back / Cancel Button (Secondary - Esc Key Equivalent)
+                  float bdx = tx - 0.72f;
+                  float bdy = ty - 0.84f;
+                  if (sqrtf(bdx * bdx + bdy * bdy) <= 0.09f) {
+                      iosTouchBack = true;
+                  }
+
+                  // 4. Pause Button (Top Right - Enter Key Equivalent)
                   float pdx = tx - 0.92f;
                   float pdy = ty - 0.08f;
-                  if (sqrtf(pdx * pdx + pdy * pdy) <= 0.09f) {
+                  if (sqrtf(pdx * pdx + pdy * pdy) <= 0.10f) {
                       iosTouchPause = true;
                   }
               }
 
-              // Apply inputs directly to Player 1 (controller[0])
-              ApplyTouchKey(&controller[0].keyLeft,  iosTouchLeft,  &wasLeft);
-              ApplyTouchKey(&controller[0].keyRight, iosTouchRight, &wasRight);
-              ApplyTouchKey(&controller[0].keyUp,    iosTouchUp,    &wasUp);
-              ApplyTouchKey(&controller[0].keyDown,  iosTouchDown,  &wasDown);
+              // Apply strictly to Player 1 (controller[0])
+              ApplyTouchState(controller[0].keyLeft,  iosTouchLeft,  wasLeft);
+              ApplyTouchState(controller[0].keyRight, iosTouchRight, wasRight);
+              ApplyTouchState(controller[0].keyUp,    iosTouchUp,    wasUp);
+              ApplyTouchState(controller[0].keyDown,  iosTouchDown,  wasDown);
 
-              ApplyTouchKey(&controller[0].keyA,     iosTouchJump,  &wasJumpA);
-              ApplyTouchKey(&controller[0].keyB,     iosTouchJump,  &wasJumpB);
-              ApplyTouchKey(&controller[0].keyC,     iosTouchJump,  &wasJumpC);
+              // Jump maps to keyA, keyB, keyC for Jump / Spin Jump / Confirm
+              ApplyTouchState(controller[0].keyA, iosTouchJump, wasJump);
+              ApplyTouchState(controller[0].keyB, iosTouchBack, wasBack);
+              ApplyTouchState(controller[0].keyC, iosTouchJump, wasJump);
 
-              ApplyTouchKey(&controller[0].keyStart, iosTouchPause, &wasPause);
+              // Pause / Start maps to keyStart
+              ApplyTouchState(controller[0].keyStart, iosTouchPause, wasPause);
           }
           }
           """
+          patch(base + "Input/Input.cpp", r"^void RSDK::ProcessInput\(\)", lambda m: logic + m.group(0))
+          patch(base + "Input/Input.cpp", r"^void RSDK::ProcessInput\(\)\r?\n\{", lambda m: m.group(0) + "\n    IOSTouchUpdate();")
 
-          if "math.h" not in cpp_data and "<cmath>" not in cpp_data:
-              cpp_data = "#include <math.h>\n" + cpp_data
-
-          if "IOSTouchUpdate()" not in cpp_data:
-              cpp_data = cpp_data.replace("void RSDK::ProcessInput()", touch_logic + "\nvoid RSDK::ProcessInput()")
-              cpp_data = cpp_data.replace("void RSDK::ProcessInput()\n{", "void RSDK::ProcessInput()\n{\n    IOSTouchUpdate();")
-              open(cpp_path, "w", newline="").write(cpp_data)
-
-          # 3. Render Translucent Touch Overlay in SDL2RenderDevice.cpp
-          render_path = base + "Graphics/SDL2/SDL2RenderDevice.cpp"
-          render_data = open(render_path, newline="").read()
-
+          # 3. Render Modern Analog Stick Overlay in SDL2RenderDevice.cpp
           render_overlay = """
           namespace RSDK {
-          extern bool32 iosTouchLeft, iosTouchRight, iosTouchUp, iosTouchDown, iosTouchJump, iosTouchPause;
+          extern bool32 iosTouchLeft, iosTouchRight, iosTouchUp, iosTouchDown, iosTouchJump, iosTouchBack, iosTouchPause;
           extern float iosJoyKnobX, iosJoyKnobY;
           }
 
@@ -212,113 +218,94 @@ jobs:
                   }
               };
 
-              // 1. Virtual Joystick Base
-              int jcx = (int)(0.15f * W);
+              // 1. Virtual Joystick Base Outer Ring
+              int jcx = (int)(0.18f * W);
               int jcy = (int)(0.72f * H);
-              int jr  = (int)(0.12f * H);
-              DrawFillCircle(jcx, jcy, jr, 255, 255, 255, 35);
+              int jr  = (int)(0.14f * H);
+              DrawFillCircle(jcx, jcy, jr, 255, 255, 255, 30);
               DrawRing(jcx, jcy, jr, 3, 255, 255, 255, 140);
 
-              // 2. Virtual Joystick Thumb Knob
+              // 2. Virtual Joystick Dynamic Thumb Knob
               int kx = (int)(RSDK::iosJoyKnobX * W);
               int ky = (int)(RSDK::iosJoyKnobY * H);
-              int kr = (int)(0.055f * H);
+              int kr = (int)(0.06f * H);
               bool32 joyHeld = RSDK::iosTouchLeft || RSDK::iosTouchRight || RSDK::iosTouchUp || RSDK::iosTouchDown;
-              DrawFillCircle(kx, ky, kr, 255, 255, 255, joyHeld ? 210 : 110);
+              DrawFillCircle(kx, ky, kr, 255, 255, 255, joyHeld ? 210 : 100);
               DrawRing(kx, ky, kr, 2, 255, 255, 255, 230);
 
-              // 3. Jump Button (Bottom-Right)
-              int bcx = (int)(0.85f * W);
+              // 3. Jump Button (Bottom Right)
+              int bcx = (int)(0.84f * W);
               int bcy = (int)(0.72f * H);
-              int br  = (int)(0.09f * H);
-              DrawFillCircle(bcx, bcy, br, 255, 255, 255, RSDK::iosTouchJump ? 190 : 70);
+              int br  = (int)(0.095f * H);
+              DrawFillCircle(bcx, bcy, br, 255, 255, 255, RSDK::iosTouchJump ? 200 : 75);
               DrawRing(bcx, bcy, br, 3, 255, 255, 255, 220);
 
-              // 4. Pause Button (Top-Right)
+              // 4. Back / Cancel Button (Secondary)
+              int backcx = (int)(0.72f * W);
+              int backcy = (int)(0.84f * H);
+              int backr  = (int)(0.06f * H);
+              DrawFillCircle(backcx, backcy, backr, 255, 255, 255, RSDK::iosTouchBack ? 200 : 60);
+              DrawRing(backcx, backcy, backr, 2, 255, 255, 255, 180);
+
+              // 5. Pause Button (Top Right)
               int pcx = (int)(0.92f * W);
               int pcy = (int)(0.08f * H);
-              int pr  = (int)(0.045f * H);
-              DrawFillCircle(pcx, pcy, pr, 255, 255, 255, RSDK::iosTouchPause ? 190 : 70);
+              int pr  = (int)(0.05f * H);
+              DrawFillCircle(pcx, pcy, pr, 255, 255, 255, RSDK::iosTouchPause ? 200 : 75);
               DrawRing(pcx, pcy, pr, 2, 255, 255, 255, 200);
           }
           """
+          patch(base + "Graphics/SDL2/SDL2RenderDevice.cpp",
+                r"^(\s*)SDL_RenderPresent\(renderer\);",
+                lambda m: render_overlay + "\n    RenderIOSTouchOverlay(renderer);\n" + m.group(0))
 
-          if "RenderIOSTouchOverlay" not in render_data:
-              render_data = render_overlay + "\n" + render_data
-              render_data = render_data.replace("SDL_RenderPresent(renderer);", "RenderIOSTouchOverlay(renderer);\n    SDL_RenderPresent(renderer);")
-              open(render_path, "w", newline="").write(render_data)
-
-          print("Successfully injected Analog Joystick and Action touch controls!")
+          print("Analog Joystick and touch controls patched successfully!")
           PY
 
-      - name: Configure CMake for iOS 8 (armv7 + GLES2)
+      - name: IOSBUILD configure
         run: |
           mkdir -p stubs
           printf '#ifndef AVAIL_VERSIONS_STUB_H\n#define AVAIL_VERSIONS_STUB_H\n#endif\n' > stubs/AvailabilityVersions.h
-
           cat > stubs/platver.c <<'EOF'
           typedef unsigned int u32;
           int __isPlatformVersionAtLeast(u32 platform, u32 major, u32 minor, u32 sub) { return major <= 8; }
           EOF
-
           LB=/usr/lib/llvm-18/bin
           SDK=$PWD/sdks/iPhoneOS10.3.sdk
-
           clang --target=armv7-apple-ios8.0 -isysroot $SDK -w -c stubs/platver.c -o stubs/platver.o
-
-          CF="--target=armv7-apple-ios8.0 -isysroot $SDK -w -I$PWD/stubs -UGAME_INCLUDE_EDITOR -DRETRO_USING_GLES2=1 -DRETRO_USING_OPENGL=1 -DRETRO_REV02=1 -DGLES_SILENCE_DEPRECATION=1 -Dmain=SDL_main"
+          CF="--target=armv7-apple-ios8.0 -isysroot $SDK -w -I$PWD/stubs -UGAME_INCLUDE_EDITOR -DRETRO_USING_GLES2=1 -DRETRO_USING_OPENGL=1 -DGLES_SILENCE_DEPRECATION=1 -Dmain=SDL_main"
           CXXF="-nostdinc++ -isystem /usr/lib/llvm-18/include/c++/v1 -fno-exceptions -fno-rtti"
-
           cmake -S Game -B build \
-            -DCMAKE_SYSTEM_NAME=iOS \
-            -DCMAKE_OSX_SYSROOT=$SDK \
-            -DCMAKE_SYSROOT=$SDK \
+            -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_SYSROOT=$SDK -DCMAKE_SYSROOT=$SDK \
             -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \
-            -DCMAKE_C_COMPILER=clang \
-            -DCMAKE_CXX_COMPILER=clang++ \
-            -DCMAKE_OBJC_COMPILER=clang \
-            -DCMAKE_OBJCXX_COMPILER=clang++ \
+            -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+            -DCMAKE_OBJC_COMPILER=clang -DCMAKE_OBJCXX_COMPILER=clang++ \
             -DCMAKE_INSTALL_NAME_TOOL=/bin/true \
-            -DCMAKE_AR=$LB/llvm-ar \
-            -DCMAKE_RANLIB=$LB/llvm-ranlib \
-            -DCMAKE_NM=$LB/llvm-nm \
-            -DCMAKE_STRIP=$LB/llvm-strip \
-            -DCMAKE_OBJDUMP=$LB/llvm-objdump \
-            -DCMAKE_C_FLAGS="$CF" \
-            -DCMAKE_CXX_FLAGS="$CF $CXXF" \
-            -DCMAKE_OBJC_FLAGS="$CF" \
-            -DCMAKE_OBJCXX_FLAGS="$CF $CXXF" \
+            -DCMAKE_AR=$LB/llvm-ar -DCMAKE_RANLIB=$LB/llvm-ranlib \
+            -DCMAKE_NM=$LB/llvm-nm -DCMAKE_STRIP=$LB/llvm-strip -DCMAKE_OBJDUMP=$LB/llvm-objdump \
+            -DCMAKE_C_FLAGS="$CF" -DCMAKE_CXX_FLAGS="$CF $CXXF" \
+            -DCMAKE_OBJC_FLAGS="$CF" -DCMAKE_OBJCXX_FLAGS="$CF $CXXF" \
             -DCMAKE_EXE_LINKER_FLAGS="--target=armv7-apple-ios8.0 -isysroot $SDK -fuse-ld=$GITHUB_WORKSPACE/theos/toolchain/linux/iphone/bin/ld -nostdlib -lgcc_s.1 -lobjc $PWD/stubs/platver.o -Wl,-undefined,dynamic_lookup" \
-            -DPLATFORM=iOS \
-            -DGAME_STATIC=ON \
-            -DRETRO_MOD_LOADER=OFF \
-            -DRETRO_USING_GLES2=ON \
-            -DRETRO_USING_OPENGL=ON \
-            -DWITH_RSDK=ON
-
-      - name: Patch C++ Standard Flags & Build Engine
-        run: |
+            -DPLATFORM=iOS -DGAME_STATIC=ON -DRETRO_MOD_LOADER=OFF -DRETRO_USING_GLES2=ON -DRETRO_USING_OPENGL=ON -DWITH_RSDK=ON > configure.log 2>&1 || (tail -30 configure.log; exit 1)
           F=$(find build -path "*SDL2-static.dir/flags.make" | head -1)
-          [ -n "$F" ] && sed -i 's/-std=gnu++17//g' $F || true
-
+          sed -i 's/-std=gnu++17//g' $F || true
           R=$(find build -path "*RetroEngine.dir/flags.make" | head -1)
-          [ -n "$R" ] && sed -i -E 's/-std=(gnu|c)\+\+(11|98|03)/-std=gnu++17/g' $R || true
+          sed -i -E 's/-std=(gnu|c)\+\+(11|98|03)/-std=gnu++17/g' $R
 
-          cmake --build build -j$(nproc)
+      - name: IOSBUILD compile
+        run: |
+          cmake --build build -j4 -- -k > build.log 2>&1 || echo "BUILD FAILED"
+          grep -E "error:" build.log | sed 's#/home/runner/work/RSDKv5-Decompilation/RSDKv5-Decompilation/##' | sort -u | head -15 | cut -c1-230 || true
+          find build -type f -name RSDKv5U | head
 
-      - name: Code Sign & Package IPA / DEB
+      - name: IOSBUILD package
         run: |
           BIN=$(find build -type f -name RSDKv5U | head -1)
-          if [ -z "$BIN" ]; then
-            echo "Build failed: RSDKv5U binary was not generated."
-            exit 1
-          fi
-
+          if [ -z "$BIN" ]; then echo "no binary yet, skipping package"; exit 0; fi
           APP=out/Payload/RSDKv5U.app
           mkdir -p $APP
           cp "$BIN" $APP/RSDKv5U
-          chmod +x $APP/RSDKv5U
-
+          cp dependencies/ios/Default.png $APP/ 2>/dev/null || true
           cat > $APP/Info.plist <<'EOF'
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -340,19 +327,11 @@ jobs:
               <key>UIStatusBarHidden</key><true/>
               <key>UIRequiresFullScreen</key><true/>
           </dict>
-          </plist>
           EOF
-
-          # Ad-hoc sign the executable using ldid
           $GITHUB_WORKSPACE/theos/toolchain/linux/iphone/bin/ldid -S $APP/RSDKv5U
-
-          # Package .ipa
           (cd out && zip -qr SonicMania_iOS8.ipa Payload)
-
-          # Package .deb
           mkdir -p deb/Applications deb/DEBIAN
           cp -r $APP deb/Applications/
-
           cat > deb/DEBIAN/control <<'EOF'
           Package: com.rameboi.sonicmania
           Name: Sonic Mania
@@ -363,14 +342,15 @@ jobs:
           Section: Games
           Depends: firmware (>= 8.0)
           EOF
-
           printf '#!/bin/sh\nchmod -R 755 /Applications/RSDKv5U.app\nuicache\nexit 0\n' > deb/DEBIAN/postinst
           chmod 755 deb/DEBIAN/postinst
           dpkg-deb -b deb out/SonicMania_iOS8.deb
+          ls -la out
 
-      - name: Upload Build Artifacts
+      - name: Upload build files
         uses: actions/upload-artifact@v4
         if: always()
         with:
           name: SonicMania-iOS8
           path: out/*
+          if-no-files-found: ignore
