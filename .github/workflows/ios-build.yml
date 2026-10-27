@@ -16,7 +16,7 @@ jobs:
       - name: Install Theos
         uses: Randomblock1/theos-action@v1
 
-      - name: Get SDKs and C++ headers
+      - name: Get SDKs and Toolchain Dependencies
         run: |
           git clone --depth=1 https://github.com/theos/sdks
           sudo apt-get update -qq
@@ -28,39 +28,37 @@ jobs:
           mkdir -p Game/dependencies/RSDKv5
           tar --exclude=./Game --exclude=./.git --exclude=./sdks --exclude=./theos -cf - . | tar -xf - -C Game/dependencies/RSDKv5
 
-          # Link SDL2main for iOS UIWindow entry point
+          # Link SDL2main for iOS UIWindow entry point hijacking
           sed -i 's/target_link_libraries(RetroEngine SDL2-static/target_link_libraries(RetroEngine SDL2main SDL2-static/' Game/dependencies/RSDKv5/platforms/iOS.cmake
 
-          # Force OpenGL window creation instead of Metal
+          # Force OpenGL window creation instead of Metal for iOS 8 GLES 2.0
           R=Game/dependencies/RSDKv5/RSDKv5/RSDK/Graphics/SDL2/SDL2RenderDevice.cpp
           sed -i 's/int flags = SDL_WINDOW_METAL;/int flags = SDL_WINDOW_OPENGL;/' $R
 
           # Ensure main.cpp includes <SDL.h> for SDL_main macro resolution
           find Game/dependencies/RSDKv5 -name "main.cpp" -exec sed -i '1s/^/#include <SDL.h>\n/' {} +
 
-      - name: Inject Touch Controls & Analog Joystick
+      - name: Inject Analog Joystick & Player 1 Touch Engine
         run: |
           python3 - <<'PY'
-          import re, os
+          import os
 
           base = "Game/dependencies/RSDKv5/RSDKv5/RSDK/"
 
-          # 1. Update Input.hpp
+          # 1. Update Input.hpp with function prototype
           hpp_path = base + "Input/Input.hpp"
           hpp = open(hpp_path, "r").read()
-          decl = """extern bool32 iosTouchLeft, iosTouchRight, iosTouchUp, iosTouchDown, iosTouchJump, iosTouchBack, iosTouchPause;
-          extern float iosJoyKnobX, iosJoyKnobY;
-          void IOSTouchUpdate();
-          """
           if "IOSTouchUpdate" not in hpp:
-              hpp = re.sub(r"(struct\s+ControllerState\s*\{)", decl + r"\n\1", hpp, count=1)
+              hpp = hpp.replace("struct ControllerState {", "void IOSTouchUpdate();\nstruct ControllerState {")
               open(hpp_path, "w").write(hpp)
 
-          # 2. Update Input.cpp (Inserted AFTER includes so bool32/int32 are defined)
+          # 2. Update Input.cpp (Appended inside namespace RSDK after all headers are loaded)
           cpp_path = base + "Input/Input.cpp"
           cpp = open(cpp_path, "r").read()
-          
-          logic = """
+
+          touch_logic = """
+          #include <math.h>
+
           namespace RSDK {
           bool32 iosTouchLeft  = false;
           bool32 iosTouchRight = false;
@@ -142,7 +140,7 @@ jobs:
                       iosTouchJump = true;
                   }
 
-                  // 3. Back / Cancel Button (Secondary)
+                  // 3. Back / Cancel Button (Secondary Bottom Right)
                   float bdx = tx - 0.72f;
                   float bdy = ty - 0.84f;
                   if (sqrtf(bdx * bdx + bdy * bdy) <= 0.09f) {
@@ -157,7 +155,7 @@ jobs:
                   }
               }
 
-              // Apply strictly to Player 1 (controller[0])
+              // Map directly to Player 1 (controller[0])
               ApplyTouchState(controller[0].keyLeft,  iosTouchLeft,  wasLeft);
               ApplyTouchState(controller[0].keyRight, iosTouchRight, wasRight);
               ApplyTouchState(controller[0].keyUp,    iosTouchUp,    wasUp);
@@ -173,11 +171,12 @@ jobs:
           """
 
           if "IOSTouchUpdate" not in cpp:
-              cpp = re.sub(r"(\bvoid\s+(?:RSDK::)?ProcessInput\s*\(\s*\))", logic + r"\n\1", cpp, count=1)
-              cpp = re.sub(r"(\bvoid\s+(?:RSDK::)?ProcessInput\s*\(\s*\)\s*\{)", r"\1\n    IOSTouchUpdate();", cpp, count=1)
+              cpp = cpp + "\n" + touch_logic
+              cpp = cpp.replace("ProcessInput()\n{", "ProcessInput()\n{\n    RSDK::IOSTouchUpdate();")
+              cpp = cpp.replace("ProcessInput() {", "ProcessInput() {\n    RSDK::IOSTouchUpdate();")
               open(cpp_path, "w").write(cpp)
 
-          # 3. Update SDL2RenderDevice.cpp (Inserted right before SDL_RenderPresent)
+          # 3. Update SDL2RenderDevice.cpp with vector overlay renderer
           render_path = base + "Graphics/SDL2/SDL2RenderDevice.cpp"
           render = open(render_path, "r").read()
 
@@ -258,10 +257,11 @@ jobs:
           """
 
           if "RenderIOSTouchOverlay" not in render:
-              render = re.sub(r"(\bSDL_RenderPresent\s*\(\s*renderer\s*\)\s*;)", render_overlay + r"\n    RenderIOSTouchOverlay(renderer);\n\1", render, count=1)
+              render = render_overlay + "\n" + render
+              render = render.replace("SDL_RenderPresent(renderer);", "RenderIOSTouchOverlay(renderer);\n    SDL_RenderPresent(renderer);")
               open(render_path, "w").write(render)
 
-          print("Successfully patched touch engine & rendering!")
+          print("Successfully injected touch engine and visual overlay!")
           PY
 
       - name: IOSBUILD configure
