@@ -1,0 +1,14 @@
+name: recon6
+on:
+  push:
+    branches: [ios]
+jobs:
+  recon6:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: RECON6 window code
+        run: |
+          F=RSDKv5/RSDK/Graphics/SDL2/SDL2RenderDevice.cpp
+          echo "=== window/GL related lines"; grep -n "SDL_GL_SetAttribute\|SDL_WINDOW_\|SDL_CreateWindow\|SDL_CreateRenderer\|SDL_SetHint\|SDL_Init\|SDL_RENDERER\|RETRO_iOS\|RETRO_PLATFORM" $F | cut -c1-200 | head -60
+          echo "=== around the failing line"; grep -n "failed to create window" -B30 -A4 $F | cut -c1-200
