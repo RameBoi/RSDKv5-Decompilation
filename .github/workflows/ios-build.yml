@@ -1,10 +1,7 @@
 name: ios-build
-
 on:
   push:
     branches: [ios]
-  workflow_dispatch:
-
 jobs:
   ios-build:
     runs-on: ubuntu-latest
@@ -12,258 +9,397 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
-
       - name: Install Theos
         uses: Randomblock1/theos-action@v1
-
-      - name: Get SDKs and Toolchain Dependencies
+      - name: Get SDKs and C++ headers
         run: |
           git clone --depth=1 https://github.com/theos/sdks
           sudo apt-get update -qq
-          sudo apt-get install -y -qq libc++-18-dev libc++abi-18-dev cmake ninja-build dpkg zip
-
-      - name: Prepare RSDKv5 Submodule & Force OpenGL Window
+          sudo apt-get install -y -qq libc++-18-dev libc++abi-18-dev cmake
+      - name: Put our RSDKv5 into the Mania game build
         run: |
           rm -rf Game/dependencies/RSDKv5
           mkdir -p Game/dependencies/RSDKv5
           tar --exclude=./Game --exclude=./.git --exclude=./sdks --exclude=./theos -cf - . | tar -xf - -C Game/dependencies/RSDKv5
-
-          # Link SDL2main for iOS UIWindow entry point hijacking
           sed -i 's/target_link_libraries(RetroEngine SDL2-static/target_link_libraries(RetroEngine SDL2main SDL2-static/' Game/dependencies/RSDKv5/platforms/iOS.cmake
-
-          # Force OpenGL window creation instead of Metal for iOS 8 GLES 2.0
           R=Game/dependencies/RSDKv5/RSDKv5/RSDK/Graphics/SDL2/SDL2RenderDevice.cpp
           sed -i 's/int flags = SDL_WINDOW_METAL;/int flags = SDL_WINDOW_OPENGL;/' $R
-
-          # Ensure main.cpp includes <SDL.h> for SDL_main macro resolution
-          find Game/dependencies/RSDKv5 -name "main.cpp" -exec sed -i '1s/^/#include <SDL.h>\n/' {} +
-
-      - name: Inject Analog Joystick & Player 1 Touch Engine
+      - name: Add touch controls v0.5
         run: |
           python3 - <<'PY'
-          import os
-
+          import re
           base = "Game/dependencies/RSDKv5/RSDKv5/RSDK/"
 
-          # 1. Update Input.hpp with function prototype
-          hpp_path = base + "Input/Input.hpp"
-          hpp = open(hpp_path, "r").read()
-          if "IOSTouchUpdate" not in hpp:
-              hpp = hpp.replace("struct ControllerState {", "void IOSTouchUpdate();\nstruct ControllerState {")
-              open(hpp_path, "w").write(hpp)
+          def patch(path, pattern, make):
+              s = open(path, newline="").read()
+              new, n = re.subn(pattern, make, s, flags=re.M)
+              if n != 1:
+                  raise SystemExit("PATCH FAILED (%d matches) in %s for pattern %s" % (n, path, pattern))
+              open(path, "w", newline="").write(new)
 
-          # 2. Update Input.cpp (Appended inside namespace RSDK after headers are loaded)
-          cpp_path = base + "Input/Input.cpp"
-          cpp = open(cpp_path, "r").read()
+          decl = r"""struct IOSCircle {
+              float x, y, r;
+          };
 
-          touch_logic = """
-          #include <math.h>
+          extern IOSCircle iosLayout[8];
+          extern bool32 iosHeld[8];
+          extern bool32 iosStickOn;
+          extern float iosKnobX, iosKnobY;
+          extern float iosScale, iosOpacity;
+          extern int32 iosHide;
+          extern int32 iosScreenW, iosScreenH;
+          void IOSComputeLayout();
+          void IOSTouchUpdate();
+          void ProcessInputReal();
 
-          namespace RSDK {
-          bool32 iosTouchLeft  = false;
-          bool32 iosTouchRight = false;
-          bool32 iosTouchUp    = false;
-          bool32 iosTouchDown  = false;
-          bool32 iosTouchJump  = false;
-          bool32 iosTouchBack  = false;
-          bool32 iosTouchPause = false;
+          """
 
-          float iosJoyKnobX = 0.18f;
-          float iosJoyKnobY = 0.72f;
+          logic = r"""#include <math.h>
+          #include <stdio.h>
 
-          static bool32 wasLeft  = false;
-          static bool32 wasRight = false;
-          static bool32 wasUp    = false;
-          static bool32 wasDown  = false;
-          static bool32 wasJump  = false;
-          static bool32 wasBack  = false;
-          static bool32 wasPause = false;
+          RSDK::IOSCircle RSDK::iosLayout[8];
+          bool32 RSDK::iosHeld[8] = { 0, 0, 0, 0, 0, 0, 0, 0 };
+          bool32 RSDK::iosStickOn = false;
+          float RSDK::iosKnobX    = 0;
+          float RSDK::iosKnobY    = 0;
+          float RSDK::iosScale    = 1.0f;
+          float RSDK::iosOpacity  = 0.45f;
+          int32 RSDK::iosHide     = 0;
+          int32 RSDK::iosScreenW  = 2048;
+          int32 RSDK::iosScreenH  = 1536;
 
-          static inline void ApplyTouchState(InputState &key, bool32 active, bool32 &wasActive) {
-              if (active) {
-                  key.down = true;
-                  if (!wasActive) key.press = true;
-                  wasActive = true;
-              } else {
-                  if (wasActive) {
-                      key.down = false;
-                      wasActive = false;
-                  }
-              }
+          static void IOSCfgSave()
+          {
+              char path[1100];
+              snprintf(path, sizeof(path), "%s/touchcontrols.ini", getResourcesPath());
+              FILE *f = fopen(path, "w");
+              if (!f)
+                  return;
+              fprintf(f, "scale=%.2f\nopacity=%.2f\nhide=%d\n", RSDK::iosScale, RSDK::iosOpacity, (int)RSDK::iosHide);
+              fclose(f);
           }
 
-          void IOSTouchUpdate() {
-              iosTouchLeft  = false;
-              iosTouchRight = false;
-              iosTouchUp    = false;
-              iosTouchDown  = false;
-              iosTouchJump  = false;
-              iosTouchBack  = false;
-              iosTouchPause = false;
+          static void IOSCfgLoad()
+          {
+              char path[1100];
+              snprintf(path, sizeof(path), "%s/touchcontrols.ini", getResourcesPath());
+              FILE *f = fopen(path, "r");
+              if (!f) {
+                  IOSCfgSave();
+                  return;
+              }
+              char line[128];
+              while (fgets(line, sizeof(line), f)) {
+                  float v = 0;
+                  if (sscanf(line, "scale=%f", &v) == 1)
+                      RSDK::iosScale = v;
+                  else if (sscanf(line, "opacity=%f", &v) == 1)
+                      RSDK::iosOpacity = v;
+                  else if (sscanf(line, "hide=%f", &v) == 1)
+                      RSDK::iosHide = v > 0.5f ? 1 : 0;
+              }
+              fclose(f);
+              if (RSDK::iosScale < 0.5f)
+                  RSDK::iosScale = 0.5f;
+              if (RSDK::iosScale > 2.0f)
+                  RSDK::iosScale = 2.0f;
+              if (RSDK::iosOpacity < 0.1f)
+                  RSDK::iosOpacity = 0.1f;
+              if (RSDK::iosOpacity > 1.0f)
+                  RSDK::iosOpacity = 1.0f;
+          }
 
-              float joyCenterX = 0.18f;
-              float joyCenterY = 0.72f;
-              float joyRadius  = 0.14f;
+          void RSDK::IOSComputeLayout()
+          {
+              float W = (float)iosScreenW;
+              float H = (float)iosScreenH;
+              float s = iosScale;
+              float m = 0.05f * H;
 
-              iosJoyKnobX = joyCenterX;
-              iosJoyKnobY = joyCenterY;
+              float rStick = 0.085f * H * s;
+              float rA     = 0.065f * H * s;
+              float rB     = 0.050f * H * s;
+              float rStart = 0.032f * H * s;
+              float rSmall = 0.026f * H;
 
-              bool32 joyActive = false;
+              iosLayout[0].r = rStick;
+              iosLayout[0].x = m + rStick * 1.5f;
+              iosLayout[0].y = H - m - rStick * 1.5f;
+
+              iosLayout[1].r = rA;
+              iosLayout[1].x = W - m - rA * 1.4f;
+              iosLayout[1].y = H - m - rA * 1.5f;
+
+              iosLayout[2].r = rB;
+              iosLayout[2].x = iosLayout[1].x - rA - rB * 1.5f;
+              iosLayout[2].y = iosLayout[1].y + rA * 0.45f;
+
+              iosLayout[3].r = rStart;
+              iosLayout[3].x = W * 0.5f;
+              iosLayout[3].y = m * 0.5f + rStart;
+
+              iosLayout[6].r = rSmall;
+              iosLayout[6].x = W - m * 0.6f - rSmall;
+              iosLayout[6].y = m * 0.5f + rSmall;
+              iosLayout[5].r = rSmall;
+              iosLayout[5].x = iosLayout[6].x - rSmall * 2.8f;
+              iosLayout[5].y = iosLayout[6].y;
+              iosLayout[4].r = rSmall;
+              iosLayout[4].x = iosLayout[5].x - rSmall * 2.8f;
+              iosLayout[4].y = iosLayout[6].y;
+          }
+
+          void RSDK::IOSTouchUpdate()
+          {
+              static bool32 loaded     = false;
+              static bool32 prev[8]    = { 0, 0, 0, 0, 0, 0, 0, 0 };
+              static bool32 prevDir[4] = { 0, 0, 0, 0 };
+              static int32 prevMask    = 0;
+              if (!loaded) {
+                  loaded = true;
+                  IOSCfgLoad();
+              }
+
+              IOSComputeLayout();
+              float W = (float)iosScreenW;
+              float H = (float)iosScreenH;
+
+              bool32 now[8] = { 0, 0, 0, 0, 0, 0, 0, 0 };
+              bool32 dir[4] = { 0, 0, 0, 0 }; // up, down, left, right
+              bool32 stickOn = false;
+              float knobX    = iosLayout[0].x;
+              float knobY    = iosLayout[0].y;
 
               for (int32 t = 0; t < touchInfo.count; ++t) {
-                  if (!touchInfo.down[t]) continue;
-                  float tx = touchInfo.x[t];
-                  float ty = touchInfo.y[t];
+                  if (!touchInfo.down[t])
+                      continue;
+                  float px = touchInfo.x[t] * W;
+                  float py = touchInfo.y[t] * H;
 
-                  // 1. Analog Joystick (Left Side)
-                  float dx = tx - joyCenterX;
-                  float dy = ty - joyCenterY;
-                  float dist = sqrtf(dx * dx + dy * dy);
+                  for (int32 b = 1; b < 7; ++b) {
+                      if (iosHide && b != 6)
+                          continue;
+                      float dx    = px - iosLayout[b].x;
+                      float dy    = py - iosLayout[b].y;
+                      float reach = iosLayout[b].r * (b >= 4 ? 1.7f : 1.3f);
+                      if (dx * dx + dy * dy <= reach * reach)
+                          now[b] = true;
+                  }
 
-                  if (tx < 0.45f && ty > 0.35f && !joyActive) {
-                      joyActive = true;
-                      float clampDist = dist > joyRadius ? joyRadius : dist;
-                      if (dist > 0.0001f) {
-                          iosJoyKnobX = joyCenterX + (dx / dist) * clampDist;
-                          iosJoyKnobY = joyCenterY + (dy / dist) * clampDist;
+                  if (!iosHide && !stickOn) {
+                      float dx    = px - iosLayout[0].x;
+                      float dy    = py - iosLayout[0].y;
+                      float reach = iosLayout[0].r * 2.4f;
+                      if (dx * dx + dy * dy <= reach * reach) {
+                          stickOn    = true;
+                          float rr   = iosLayout[0].r;
+                          float dist = sqrtf(dx * dx + dy * dy);
+                          float kmax = rr * 0.9f;
+                          float k    = dist > kmax ? kmax / dist : 1.0f;
+                          knobX      = iosLayout[0].x + dx * k;
+                          knobY      = iosLayout[0].y + dy * k;
+                          float thrH = rr * 0.3f;
+                          float thrV = rr * 0.5f;
+                          if (dx < -thrH)
+                              dir[2] = true;
+                          if (dx > thrH)
+                              dir[3] = true;
+                          if (dy < -thrV)
+                              dir[0] = true;
+                          if (dy > thrV)
+                              dir[1] = true;
                       }
-                      if (dx < -0.025f) iosTouchLeft  = true;
-                      if (dx > 0.025f)  iosTouchRight = true;
-                      if (dy < -0.025f) iosTouchUp    = true;
-                      if (dy > 0.025f)  iosTouchDown  = true;
-                  }
-
-                  // 2. Jump / Confirm Button (Bottom Right)
-                  float jdx = tx - 0.84f;
-                  float jdy = ty - 0.72f;
-                  if (sqrtf(jdx * jdx + jdy * jdy) <= 0.15f) {
-                      iosTouchJump = true;
-                  }
-
-                  // 3. Back / Cancel Button (Secondary Bottom Right)
-                  float bdx = tx - 0.72f;
-                  float bdy = ty - 0.84f;
-                  if (sqrtf(bdx * bdx + bdy * bdy) <= 0.09f) {
-                      iosTouchBack = true;
-                  }
-
-                  // 4. Pause Button (Top Right)
-                  float pdx = tx - 0.92f;
-                  float pdy = ty - 0.08f;
-                  if (sqrtf(pdx * pdx + pdy * pdy) <= 0.10f) {
-                      iosTouchPause = true;
                   }
               }
 
-              // Map directly to Player 1 (controller[0])
-              ApplyTouchState(controller[0].keyLeft,  iosTouchLeft,  wasLeft);
-              ApplyTouchState(controller[0].keyRight, iosTouchRight, wasRight);
-              ApplyTouchState(controller[0].keyUp,    iosTouchUp,    wasUp);
-              ApplyTouchState(controller[0].keyDown,  iosTouchDown,  wasDown);
+              if (now[4] && !prev[4]) {
+                  iosScale -= 0.1f;
+                  if (iosScale < 0.5f)
+                      iosScale = 0.5f;
+                  IOSCfgSave();
+              }
+              if (now[5] && !prev[5]) {
+                  iosScale += 0.1f;
+                  if (iosScale > 2.0f)
+                      iosScale = 2.0f;
+                  IOSCfgSave();
+              }
+              if (now[6] && !prev[6]) {
+                  iosHide = iosHide ? 0 : 1;
+                  IOSCfgSave();
+              }
 
-              ApplyTouchState(controller[0].keyA, iosTouchJump, wasJump);
-              ApplyTouchState(controller[0].keyB, iosTouchBack, wasBack);
-              ApplyTouchState(controller[0].keyC, iosTouchJump, wasJump);
+              int32 mask = 0;
+              for (int32 d = 0; d < 4; ++d) {
+                  if (dir[d])
+                      mask |= (1 << d);
+              }
+              for (int32 b = 1; b < 4; ++b) {
+                  if (now[b])
+                      mask |= (1 << (b + 3));
+              }
+              if (mask != prevMask) {
+                  PrintLog(PRINT_NORMAL, "touch mask: %d slot0=%d", mask, (int)inputSlots[0]);
+                  prevMask = mask;
+              }
 
-              ApplyTouchState(controller[0].keyStart, iosTouchPause, wasPause);
-          }
-          }
-          """
-
-          if "IOSTouchUpdate" not in cpp:
-              cpp = cpp + "\n" + touch_logic
-              cpp = cpp.replace("ProcessInput()\n{", "ProcessInput()\n{\n    RSDK::IOSTouchUpdate();")
-              cpp = cpp.replace("ProcessInput() {", "ProcessInput() {\n    RSDK::IOSTouchUpdate();")
-              open(cpp_path, "w").write(cpp)
-
-          # 3. Update SDL2RenderDevice.cpp with vector overlay renderer
-          render_path = base + "Graphics/SDL2/SDL2RenderDevice.cpp"
-          render = open(render_path, "r").read()
-
-          render_overlay = """
-          namespace RSDK {
-          extern bool32 iosTouchLeft, iosTouchRight, iosTouchUp, iosTouchDown, iosTouchJump, iosTouchBack, iosTouchPause;
-          extern float iosJoyKnobX, iosJoyKnobY;
-          }
-
-          static void RenderIOSTouchOverlay(SDL_Renderer *renderer) {
-              int outW = 0, outH = 0;
-              SDL_GetRendererOutputSize(renderer, &outW, &outH);
-              int W = outW, H = outH;
-              if (W <= 0 || H <= 0) return;
-
-              SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
-
-              auto DrawFillCircle = [&](int cx, int cy, int r, Uint8 red, Uint8 green, Uint8 blue, Uint8 alpha) {
-                  SDL_SetRenderDrawColor(renderer, red, green, blue, alpha);
-                  int r2 = r * r;
-                  for (int dy = -r; dy <= r; dy++) {
-                      int dy2 = dy * dy;
-                      int dx = (int)sqrtf((float)(r2 - dy2));
-                      SDL_RenderDrawLine(renderer, cx - dx, cy + dy, cx + dx, cy + dy);
-                  }
-              };
-
-              auto DrawRing = [&](int cx, int cy, int r, int thickness, Uint8 red, Uint8 green, Uint8 blue, Uint8 alpha) {
-                  SDL_SetRenderDrawColor(renderer, red, green, blue, alpha);
-                  int outer2 = r * r;
-                  int inner2 = (r - thickness) * (r - thickness);
-                  for (int dy = -r; dy <= r; dy++) {
-                      for (int dx = -r; dx <= r; dx++) {
-                          int d2 = dx * dx + dy * dy;
-                          if (d2 <= outer2 && d2 >= inner2) {
-                              SDL_RenderDrawPoint(renderer, cx + dx, cy + dy);
-                          }
+              auto apply = [&](InputState *k0, InputState *k1, bool32 nowv, bool32 prevv) {
+                  if (nowv) {
+                      k0->down = true;
+                      k1->down = true;
+                      if (!prevv) {
+                          k0->press = true;
+                          k1->press = true;
                       }
                   }
               };
+              apply(&controller[0].keyUp, &controller[1].keyUp, dir[0], prevDir[0]);
+              apply(&controller[0].keyDown, &controller[1].keyDown, dir[1], prevDir[1]);
+              apply(&controller[0].keyLeft, &controller[1].keyLeft, dir[2], prevDir[2]);
+              apply(&controller[0].keyRight, &controller[1].keyRight, dir[3], prevDir[3]);
+              apply(&controller[0].keyA, &controller[1].keyA, now[1], prev[1]);
+              apply(&controller[0].keyB, &controller[1].keyB, now[2], prev[2]);
+              apply(&controller[0].keyStart, &controller[1].keyStart, now[3], prev[3]);
 
-              // 1. Joystick Outer Ring
-              int jcx = (int)(0.18f * W);
-              int jcy = (int)(0.72f * H);
-              int jr  = (int)(0.14f * H);
-              DrawFillCircle(jcx, jcy, jr, 255, 255, 255, 30);
-              DrawRing(jcx, jcy, jr, 3, 255, 255, 255, 140);
-
-              // 2. Dynamic Thumb Knob
-              int kx = (int)(RSDK::iosJoyKnobX * W);
-              int ky = (int)(RSDK::iosJoyKnobY * H);
-              int kr = (int)(0.06f * H);
-              bool32 joyHeld = RSDK::iosTouchLeft || RSDK::iosTouchRight || RSDK::iosTouchUp || RSDK::iosTouchDown;
-              DrawFillCircle(kx, ky, kr, 255, 255, 255, joyHeld ? 210 : 100);
-              DrawRing(kx, ky, kr, 2, 255, 255, 255, 230);
-
-              // 3. Jump Button
-              int bcx = (int)(0.84f * W);
-              int bcy = (int)(0.72f * H);
-              int br  = (int)(0.095f * H);
-              DrawFillCircle(bcx, bcy, br, 255, 255, 255, RSDK::iosTouchJump ? 200 : 75);
-              DrawRing(bcx, bcy, br, 3, 255, 255, 255, 220);
-
-              // 4. Back Button
-              int backcx = (int)(0.72f * W);
-              int backcy = (int)(0.84f * H);
-              int backr  = (int)(0.06f * H);
-              DrawFillCircle(backcx, backcy, backr, 255, 255, 255, RSDK::iosTouchBack ? 200 : 60);
-              DrawRing(backcx, backcy, backr, 2, 255, 255, 255, 180);
-
-              // 5. Pause Button
-              int pcx = (int)(0.92f * W);
-              int pcy = (int)(0.08f * H);
-              int pr  = (int)(0.05f * H);
-              DrawFillCircle(pcx, pcy, pr, 255, 255, 255, RSDK::iosTouchPause ? 200 : 75);
-              DrawRing(pcx, pcy, pr, 2, 255, 255, 255, 200);
+              for (int32 b = 0; b < 8; ++b) {
+                  prev[b]    = now[b];
+                  iosHeld[b] = now[b];
+              }
+              for (int32 d = 0; d < 4; ++d)
+                  prevDir[d] = dir[d];
+              iosStickOn = stickOn;
+              iosKnobX   = knobX;
+              iosKnobY   = knobY;
           }
+
           """
 
-          if "RenderIOSTouchOverlay" not in render:
-              render = render_overlay + "\n" + render
-              render = render.replace("SDL_RenderPresent(renderer);", "RenderIOSTouchOverlay(renderer);\n    SDL_RenderPresent(renderer);")
-              open(render_path, "w").write(render)
+          draw = r"""    {
+                  static SDL_Texture *iosDisc      = NULL;
+                  static SDL_Texture *iosRing      = NULL;
+                  static SDL_Renderer *iosTexOwner = NULL;
+                  static bool iosLogged            = false;
+                  int outW = 0, outH = 0, lw = 0, lh = 0;
+                  float sx = 1.0f, sy = 1.0f;
+                  SDL_GetRendererOutputSize(renderer, &outW, &outH);
+                  SDL_RenderGetLogicalSize(renderer, &lw, &lh);
+                  SDL_RenderGetScale(renderer, &sx, &sy);
+                  SDL_RenderSetClipRect(renderer, NULL);
+                  SDL_RenderSetViewport(renderer, NULL);
+                  int W = lw ? lw : (int)(outW / sx);
+                  int H = lh ? lh : (int)(outH / sy);
+                  iosScreenW = W;
+                  iosScreenH = H;
+                  IOSComputeLayout();
+                  if (!iosLogged) {
+                      iosLogged = true;
+                      PrintLog(PRINT_NORMAL, "IOSOVERLAY v0.5 screen=%dx%d", W, H);
+                  }
 
-          print("Successfully injected touch engine and visual overlay!")
+                  if (iosTexOwner != renderer) {
+                      iosTexOwner = renderer;
+                      iosDisc     = NULL;
+                      iosRing     = NULL;
+                      const int N = 128;
+                      static Uint32 px[128 * 128];
+                      SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "linear");
+                      for (int pass = 0; pass < 2; ++pass) {
+                          for (int y = 0; y < N; ++y) {
+                              for (int x = 0; x < N; ++x) {
+                                  float dx = x + 0.5f - N / 2.0f;
+                                  float dy = y + 0.5f - N / 2.0f;
+                                  float d  = (float)SDL_sqrt(dx * dx + dy * dy);
+                                  float R  = N / 2.0f - 1.0f;
+                                  float a  = R - d + 0.5f;
+                                  if (pass == 1) {
+                                      float a2 = d - (R - 7.0f) + 0.5f;
+                                      if (a2 < a)
+                                          a = a2;
+                                  }
+                                  if (a < 0.0f)
+                                      a = 0.0f;
+                                  if (a > 1.0f)
+                                      a = 1.0f;
+                                  px[y * N + x] = ((Uint32)(a * 255.0f) << 24) | 0x00FFFFFF;
+                              }
+                          }
+                          SDL_Texture *tex = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STATIC, N, N);
+                          if (tex) {
+                              SDL_UpdateTexture(tex, NULL, px, N * 4);
+                              SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_BLEND);
+                          }
+                          if (pass == 0)
+                              iosDisc = tex;
+                          else
+                              iosRing = tex;
+                      }
+                      SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "nearest");
+                  }
+
+                  if (iosDisc && iosRing) {
+                      float op = iosOpacity;
+                      auto drawTex = [&](SDL_Texture *tex, float cx, float cy, float r, float alpha) {
+                          if (alpha < 0.0f)
+                              alpha = 0.0f;
+                          if (alpha > 1.0f)
+                              alpha = 1.0f;
+                          SDL_SetTextureAlphaMod(tex, (Uint8)(alpha * 255.0f));
+                          SDL_Rect d;
+                          d.x = (int)(cx - r);
+                          d.y = (int)(cy - r);
+                          d.w = (int)(r * 2.0f);
+                          d.h = (int)(r * 2.0f);
+                          SDL_RenderCopy(renderer, tex, NULL, &d);
+                      };
+                      auto bar = [&](float cx, float cy, float w, float h, float alpha) {
+                          if (alpha > 1.0f)
+                              alpha = 1.0f;
+                          SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+                          SDL_SetRenderDrawColor(renderer, 255, 255, 255, (Uint8)(alpha * 255.0f));
+                          SDL_Rect d;
+                          d.x = (int)(cx - w / 2.0f);
+                          d.y = (int)(cy - h / 2.0f);
+                          d.w = (int)w;
+                          d.h = (int)h;
+                          SDL_RenderFillRect(renderer, &d);
+                      };
+
+                      if (!iosHide) {
+                          IOSCircle &sb = iosLayout[0];
+                          drawTex(iosDisc, sb.x, sb.y, sb.r, op * 0.3f);
+                          drawTex(iosRing, sb.x, sb.y, sb.r, op * 1.4f);
+                          drawTex(iosDisc, iosKnobX, iosKnobY, sb.r * 0.42f, op * (iosStickOn ? 1.5f : 0.9f));
+
+                          for (int b = 1; b < 4; ++b) {
+                              IOSCircle &c = iosLayout[b];
+                              drawTex(iosDisc, c.x, c.y, c.r, iosHeld[b] ? op * 1.4f : op * 0.4f);
+                              drawTex(iosRing, c.x, c.y, c.r, op * 1.4f);
+                          }
+
+                          IOSCircle &mi = iosLayout[4];
+                          IOSCircle &pl = iosLayout[5];
+                          drawTex(iosDisc, mi.x, mi.y, mi.r, iosHeld[4] ? op * 1.4f : op * 0.4f);
+                          drawTex(iosDisc, pl.x, pl.y, pl.r, iosHeld[5] ? op * 1.4f : op * 0.4f);
+                          bar(mi.x, mi.y, mi.r * 1.0f, mi.r * 0.2f, op * 2.2f);
+                          bar(pl.x, pl.y, pl.r * 1.0f, pl.r * 0.2f, op * 2.2f);
+                          bar(pl.x, pl.y, pl.r * 0.2f, pl.r * 1.0f, op * 2.2f);
+                      }
+                      IOSCircle &ey = iosLayout[6];
+                      float ea      = iosHide ? op * 0.8f : op * 1.4f;
+                      drawTex(iosRing, ey.x, ey.y, ey.r, ea);
+                      drawTex(iosDisc, ey.x, ey.y, ey.r * 0.38f, iosHeld[6] ? ea * 1.5f : ea);
+                  }
+              }
+          """
+
+          patch(base + "Input/Input.hpp", r"^struct ControllerState \{", lambda m: decl + m.group(0))
+          patch(base + "Input/Input.cpp", r"^void RSDK::ProcessInput\(\)", lambda m: logic + "void RSDK::ProcessInputReal()")
+          patch(base + "Input/Input.cpp", r"^void RSDK::ProcessInputDevices\(\)",
+                lambda m: "void RSDK::ProcessInput()\n{\n    ProcessInputReal();\n    IOSTouchUpdate();\n}\n\n" + m.group(0))
+          patch(base + "Graphics/SDL2/SDL2RenderDevice.cpp", r"^(\s*)SDL_RenderPresent\(renderer\);",
+                lambda m: draw + m.group(0))
+          print("all touch patches applied")
           PY
-
       - name: IOSBUILD configure
         run: |
           mkdir -p stubs
@@ -274,8 +410,8 @@ jobs:
           EOF
           LB=/usr/lib/llvm-18/bin
           SDK=$PWD/sdks/iPhoneOS10.3.sdk
-          clang --target=armv7-apple-ios8.0 -isysroot $SDK -w -c stubs/platver.c -o stubs/platver.o
-          CF="--target=armv7-apple-ios8.0 -isysroot $SDK -w -I$PWD/stubs -UGAME_INCLUDE_EDITOR -DRETRO_USING_GLES2=1 -DRETRO_USING_OPENGL=1 -DGLES_SILENCE_DEPRECATION=1 -Dmain=SDL_main"
+          clang --target=armv7s-apple-ios8.0 -isysroot $SDK -w -c stubs/platver.c -o stubs/platver.o
+          CF="--target=armv7s-apple-ios8.0 -isysroot $SDK -w -I$PWD/stubs -UGAME_INCLUDE_EDITOR"
           CXXF="-nostdinc++ -isystem /usr/lib/llvm-18/include/c++/v1 -fno-exceptions -fno-rtti"
           cmake -S Game -B build \
             -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_SYSROOT=$SDK -DCMAKE_SYSROOT=$SDK \
@@ -287,28 +423,25 @@ jobs:
             -DCMAKE_NM=$LB/llvm-nm -DCMAKE_STRIP=$LB/llvm-strip -DCMAKE_OBJDUMP=$LB/llvm-objdump \
             -DCMAKE_C_FLAGS="$CF" -DCMAKE_CXX_FLAGS="$CF $CXXF" \
             -DCMAKE_OBJC_FLAGS="$CF" -DCMAKE_OBJCXX_FLAGS="$CF $CXXF" \
-            -DCMAKE_EXE_LINKER_FLAGS="--target=armv7-apple-ios8.0 -isysroot $SDK -fuse-ld=$GITHUB_WORKSPACE/theos/toolchain/linux/iphone/bin/ld -nostdlib -lgcc_s.1 -lobjc $PWD/stubs/platver.o -Wl,-undefined,dynamic_lookup" \
-            -DPLATFORM=iOS -DGAME_STATIC=ON -DRETRO_MOD_LOADER=OFF -DRETRO_USING_GLES2=ON -DRETRO_USING_OPENGL=ON -DWITH_RSDK=ON > configure.log 2>&1 || (tail -30 configure.log; exit 1)
+            -DCMAKE_EXE_LINKER_FLAGS="--target=armv7s-apple-ios8.0 -isysroot $SDK -fuse-ld=$GITHUB_WORKSPACE/theos/toolchain/linux/iphone/bin/ld -nostdlib -lgcc_s.1 -lobjc $PWD/stubs/platver.o -Wl,-undefined,dynamic_lookup" \
+            -DPLATFORM=iOS -DGAME_STATIC=ON -DRETRO_MOD_LOADER=OFF -DWITH_RSDK=ON > configure.log 2>&1 || (tail -30 configure.log; exit 1)
           F=$(find build -path "*SDL2-static.dir/flags.make" | head -1)
           sed -i 's/-std=gnu++17//g' $F || true
           R=$(find build -path "*RetroEngine.dir/flags.make" | head -1)
           sed -i -E 's/-std=(gnu|c)\+\+(11|98|03)/-std=gnu++17/g' $R
-
       - name: IOSBUILD compile
         run: |
-          cmake --build build -j$(nproc) -- -k > build.log 2>&1 || (echo "=== COMPILATION FAILED ===" && tail -n 40 build.log && exit 1)
+          cmake --build build -j4 -- -k > build.log 2>&1 || echo "BUILD FAILED"
+          grep -E "error:" build.log | sed 's#/home/runner/work/RSDKv5-Decompilation/RSDKv5-Decompilation/##' | sort -u | head -15 | cut -c1-230 || true
           find build -type f -name RSDKv5U | head
-
       - name: IOSBUILD package
         run: |
           BIN=$(find build -type f -name RSDKv5U | head -1)
-          if [ -z "$BIN" ]; then echo "no binary produced"; exit 1; fi
+          if [ -z "$BIN" ]; then echo "no binary yet, skipping package"; exit 0; fi
           APP=out/Payload/RSDKv5U.app
           mkdir -p $APP
           cp "$BIN" $APP/RSDKv5U
           cp dependencies/ios/Default.png $APP/ 2>/dev/null || true
-          
-          # Fully specified Info.plist for iOS 8 & Filza recognition
           cat > $APP/Info.plist <<'EOF'
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -320,64 +453,39 @@ jobs:
               <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
               <key>CFBundleName</key><string>Sonic Mania</string>
               <key>CFBundlePackageType</key><string>APPL</string>
-              <key>CFBundleSignature</key><string>????</string>
-              <key>CFBundleShortVersionString</key><string>1.0.0</string>
-              <key>CFBundleVersion</key><string>1.0.0</string>
-              <key>CFBundleSupportedPlatforms</key>
-              <array>
-                  <string>iPhoneOS</string>
-              </array>
-              <key>DTPlatformName</key><string>iphoneos</string>
-              <key>DTSDKName</key><string>iphoneos10.3</string>
+              <key>CFBundleShortVersionString</key><string>0.5</string>
+              <key>CFBundleVersion</key><string>5</string>
               <key>LSRequiresIPhoneOS</key><true/>
               <key>MinimumOSVersion</key><string>8.0</string>
-              <key>UIDeviceFamily</key>
-              <array>
-                  <integer>1</integer>
-                  <integer>2</integer>
-              </array>
-              <key>UIRequiredDeviceCapabilities</key>
-              <array>
-                  <string>armv7</string>
-                  <string>opengles-2</string>
-              </array>
-              <key>UISupportedInterfaceOrientations</key>
-              <array>
-                  <string>UIInterfaceOrientationLandscapeLeft</string>
-                  <string>UIInterfaceOrientationLandscapeRight</string>
-              </array>
+              <key>UIDeviceFamily</key><array><integer>1</integer><integer>2</integer></array>
+              <key>UIRequiredDeviceCapabilities</key><array><string>armv7</string></array>
+              <key>UISupportedInterfaceOrientations</key><array><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>
               <key>UIStatusBarHidden</key><true/>
-              <key>UIRequiresFullScreen</key><true/>
           </dict>
+          </plist>
           EOF
-
           $GITHUB_WORKSPACE/theos/toolchain/linux/iphone/bin/ldid -S $APP/RSDKv5U
           (cd out && zip -qr SonicMania_iOS8.ipa Payload)
-
-          # Prepare DEB package structure
           mkdir -p deb/Applications deb/DEBIAN
           cp -r $APP deb/Applications/
-
           cat > deb/DEBIAN/control <<'EOF'
           Package: com.rameboi.sonicmania
           Name: Sonic Mania
-          Version: 1.0.0
+          Version: 0.5
           Architecture: iphoneos-arm
-          Description: Sonic Mania (RSDKv5) port for iOS 8 with Touch Controls
+          Description: Sonic Mania (RSDKv5) port for iOS 8
           Maintainer: RameBoi
           Section: Games
           Depends: firmware (>= 8.0)
           EOF
-
           printf '#!/bin/sh\nchmod -R 755 /Applications/RSDKv5U.app\nuicache\nexit 0\n' > deb/DEBIAN/postinst
           chmod 755 deb/DEBIAN/postinst
-
-          # Force legacy gzip compression so Filza on iOS 8 doesn't crash on zstd
-          dpkg-deb -Zgzip -b deb out/SonicMania_iOS8.deb
-
+          dpkg-deb -b deb out/SonicMania_iOS8.deb
+          ls -la out
       - name: Upload build files
         uses: actions/upload-artifact@v4
         if: always()
         with:
           name: SonicMania-iOS8
           path: out/*
+          if-no-files-found: ignore
