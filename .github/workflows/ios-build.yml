@@ -25,7 +25,130 @@ jobs:
           R=Game/dependencies/RSDKv5/RSDKv5/RSDK/Graphics/SDL2/SDL2RenderDevice.cpp
           sed -i 's/int flags = SDL_WINDOW_METAL;/int flags = SDL_WINDOW_OPENGL;/' $R
           echo "=== window flags line after patch"; grep -n "int flags = " $R
-      - name: IOSBUILD configure v10
+      - name: Add on-screen touch controls
+        run: |
+          python3 - <<'PY'
+          import re
+          base = "Game/dependencies/RSDKv5/RSDKv5/RSDK/"
+
+          def patch(path, pattern, make):
+              s = open(path, newline="").read()
+              new, n = re.subn(pattern, make, s, flags=re.M)
+              if n != 1:
+                  raise SystemExit("PATCH FAILED (%d matches) in %s for pattern %s" % (n, path, pattern))
+              open(path, "w", newline="").write(new)
+
+          # 1. declarations in Input.hpp
+          decl = """extern bool32 iosTouchHeld[8];
+          extern const float iosTouchRect[8][4];
+          void IOSTouchUpdate();
+
+          """
+          patch(base + "Input/Input.hpp", r"^struct ControllerState \{", lambda m: decl + m.group(0))
+
+          # 2. the touch logic in Input.cpp
+          logic = """bool32 RSDK::iosTouchHeld[8] = { 0, 0, 0, 0, 0, 0, 0, 0 };
+
+          // x, y, w, h as a fraction of the screen (tuned for a 4:3 iPad)
+          // 0 up, 1 down, 2 left, 3 right, 4 A (jump/confirm), 5 B (back), 6 start
+          const float RSDK::iosTouchRect[8][4] = {
+              { 0.150f, 0.405f, 0.140f, 0.190f },
+              { 0.150f, 0.785f, 0.140f, 0.190f },
+              { 0.010f, 0.595f, 0.140f, 0.190f },
+              { 0.290f, 0.595f, 0.140f, 0.190f },
+              { 0.770f, 0.600f, 0.180f, 0.240f },
+              { 0.600f, 0.670f, 0.140f, 0.170f },
+              { 0.440f, 0.030f, 0.120f, 0.080f },
+              { 0.0f, 0.0f, 0.0f, 0.0f },
+          };
+
+          void RSDK::IOSTouchUpdate()
+          {
+              static bool32 prevHeld[8] = { 0, 0, 0, 0, 0, 0, 0, 0 };
+              static int32 prevMask     = 0;
+              bool32 now[8]             = { 0, 0, 0, 0, 0, 0, 0, 0 };
+
+              for (int32 t = 0; t < touchInfo.count; ++t) {
+                  if (!touchInfo.down[t])
+                      continue;
+                  float tx = touchInfo.x[t];
+                  float ty = touchInfo.y[t];
+                  for (int32 b = 0; b < 7; ++b) {
+                      const float *r = iosTouchRect[b];
+                      if (tx >= r[0] && tx <= r[0] + r[2] && ty >= r[1] && ty <= r[1] + r[3])
+                          now[b] = true;
+                  }
+              }
+
+              int32 mask = 0;
+              for (int32 b = 0; b < 7; ++b) {
+                  if (now[b])
+                      mask |= (1 << b);
+              }
+              if (mask != prevMask) {
+                  PrintLog(PRINT_NORMAL, "touch mask: %d", mask);
+                  prevMask = mask;
+              }
+
+          #define IOS_APPLY(idx, key)                                                                                                                  \\
+              if (now[idx]) {                                                                                                                          \\
+                  controller[0].key.down = true;                                                                                                       \\
+                  controller[1].key.down = true;                                                                                                       \\
+                  if (!prevHeld[idx]) {                                                                                                                \\
+                      controller[0].key.press = true;                                                                                                  \\
+                      controller[1].key.press = true;                                                                                                  \\
+                  }                                                                                                                                    \\
+              }
+              IOS_APPLY(0, keyUp)
+              IOS_APPLY(1, keyDown)
+              IOS_APPLY(2, keyLeft)
+              IOS_APPLY(3, keyRight)
+              IOS_APPLY(4, keyA)
+              IOS_APPLY(5, keyB)
+              IOS_APPLY(6, keyStart)
+          #undef IOS_APPLY
+
+              for (int32 b = 0; b < 8; ++b) {
+                  prevHeld[b]      = now[b];
+                  iosTouchHeld[b]  = now[b];
+              }
+          }
+
+          """
+          patch(base + "Input/Input.cpp", r"^void RSDK::ProcessInput\(\)", lambda m: logic + m.group(0))
+
+          # 3. call it once per frame, after the real devices were read
+          patch(base + "Input/Input.cpp",
+                r"^#if !RETRO_REV02 && RETRO_INPUTDEVICE_KEYBOARD\r?\n\s*RSDK::SKU::HandleSpecialKeys\(\);",
+                lambda m: "    IOSTouchUpdate();\n" + m.group(0))
+
+          # 4. draw the buttons just before the frame is shown
+          draw = """    {
+                  // on-screen touch controls overlay
+                  int outW = 0, outH = 0;
+                  SDL_GetRendererOutputSize(renderer, &outW, &outH);
+                  SDL_RenderSetViewport(renderer, NULL);
+                  SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+                  for (int tb = 0; tb < 7; ++tb) {
+                      SDL_Rect rc;
+                      rc.x = (int)(iosTouchRect[tb][0] * outW);
+                      rc.y = (int)(iosTouchRect[tb][1] * outH);
+                      rc.w = (int)(iosTouchRect[tb][2] * outW);
+                      rc.h = (int)(iosTouchRect[tb][3] * outH);
+                      SDL_SetRenderDrawColor(renderer, 255, 255, 255, iosTouchHeld[tb] ? 140 : 50);
+                      SDL_RenderFillRect(renderer, &rc);
+                      SDL_SetRenderDrawColor(renderer, 255, 255, 255, 150);
+                      SDL_RenderDrawRect(renderer, &rc);
+                  }
+              }
+          """
+          patch(base + "Graphics/SDL2/SDL2RenderDevice.cpp",
+                r"^(\s*)SDL_RenderPresent\(renderer\);",
+                lambda m: draw + m.group(0))
+          print("all touch patches applied")
+          PY
+          echo "=== check"; grep -n "IOSTouchUpdate\|iosTouchHeld" Game/dependencies/RSDKv5/RSDKv5/RSDK/Input/Input.hpp Game/dependencies/RSDKv5/RSDKv5/RSDK/Input/Input.cpp | cut -c1-160 | head -12
+      - name: IOSBUILD configure v11
         run: |
           mkdir -p stubs
           printf '#ifndef AVAIL_VERSIONS_STUB_H\n#define AVAIL_VERSIONS_STUB_H\n#endif\n' > stubs/AvailabilityVersions.h
@@ -51,13 +174,13 @@ jobs:
             -DCMAKE_EXE_LINKER_FLAGS="--target=armv7s-apple-ios8.0 -isysroot $SDK -fuse-ld=$GITHUB_WORKSPACE/theos/toolchain/linux/iphone/bin/ld -nostdlib -lgcc_s.1 -lobjc $PWD/stubs/platver.o -Wl,-undefined,dynamic_lookup" \
             -DPLATFORM=iOS -DGAME_STATIC=ON -DRETRO_MOD_LOADER=OFF -DWITH_RSDK=ON > configure.log 2>&1 || (tail -30 configure.log; exit 1)
           tail -3 configure.log
-      - name: IOSBUILD patch flags v10
+      - name: IOSBUILD patch flags v11
         run: |
           F=$(find build -path "*SDL2-static.dir/flags.make" | head -1)
           sed -i 's/-std=gnu++17//g' $F || true
           R=$(find build -path "*RetroEngine.dir/flags.make" | head -1)
           sed -i -E 's/-std=(gnu|c)\+\+(11|98|03)/-std=gnu++17/g' $R
-      - name: IOSBUILD compile v10
+      - name: IOSBUILD compile v11
         run: |
           cmake --build build -j4 -- -k > build.log 2>&1 || echo "BUILD FAILED"
           echo "=== distinct compile errors"; grep -E "error:" build.log | sed 's#/home/runner/work/RSDKv5-Decompilation/RSDKv5-Decompilation/##' | sort -u | head -15 | cut -c1-230 || true
@@ -83,8 +206,8 @@ jobs:
               <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
               <key>CFBundleName</key><string>Sonic Mania</string>
               <key>CFBundlePackageType</key><string>APPL</string>
-              <key>CFBundleShortVersionString</key><string>0.2</string>
-              <key>CFBundleVersion</key><string>2</string>
+              <key>CFBundleShortVersionString</key><string>0.3</string>
+              <key>CFBundleVersion</key><string>3</string>
               <key>LSRequiresIPhoneOS</key><true/>
               <key>MinimumOSVersion</key><string>8.0</string>
               <key>UIDeviceFamily</key><array><integer>1</integer><integer>2</integer></array>
@@ -101,7 +224,7 @@ jobs:
           cat > deb/DEBIAN/control <<'EOF'
           Package: com.rameboi.sonicmania
           Name: Sonic Mania
-          Version: 0.2
+          Version: 0.3
           Architecture: iphoneos-arm
           Description: Sonic Mania (RSDKv5) port for iOS 8
           Maintainer: RameBoi
