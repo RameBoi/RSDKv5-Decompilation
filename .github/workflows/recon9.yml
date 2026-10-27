@@ -1,0 +1,18 @@
+name: recon9
+on:
+  push:
+    branches: [ios]
+jobs:
+  recon9:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: RECON9 how mods load
+        run: |
+          echo "=== touch mod.ini"; cat Data/mods/ManiaTouchControls/mod.ini || true
+          echo "=== modconfig.ini"; cat Data/mods/modconfig.ini || true
+          echo "=== mod dllmain.c head"; head -50 Mods/ManiaTouchControls/ManiaTouchControls/dllmain.c || true
+          echo "=== mod objects"; ls Mods/ManiaTouchControls/ManiaTouchControls/Objects || true
+          echo "=== mod xcode project: what it builds"; grep -n "productType\|MACH_O_TYPE\|PRODUCT_NAME\|EXECUTABLE_EXTENSION\|IPHONEOS_DEPLOYMENT" Mods/ManiaTouchControls/ManiaTouchControls.xcodeproj/project.pbxproj | head -14 || true
+          echo "=== ModAPI: library loading"; grep -n "dlopen\|dlsym\|LoadLibrary\|\.dylib\|\.so\"\|\.dll\|linkModLogic\|modLogic\|RETRO_iOS\|RETRO_OSX\|RETRO_STANDALONE" RSDKv5/RSDK/Core/ModAPI.cpp | cut -c1-170 | head -40 || true
+          echo "=== mod loader init order"; grep -n "InitModAPI\|LoadMods\|SaveMods\|RETRO_USE_MOD_LOADER" RSDKv5/RSDK/Core/RetroEngine.cpp | cut -c1-150 | head -25 || true
