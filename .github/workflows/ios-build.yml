@@ -21,10 +21,11 @@ jobs:
           rm -rf Game/dependencies/RSDKv5
           mkdir -p Game/dependencies/RSDKv5
           tar --exclude=./Game --exclude=./.git --exclude=./sdks --exclude=./theos -cf - . | tar -xf - -C Game/dependencies/RSDKv5
-          echo "=== SDL2main target in SDL cmake"; grep -n "SDL2main" Game/dependencies/RSDKv5/dependencies/ios/SDL/CMakeLists.txt | head -8
           sed -i 's/target_link_libraries(RetroEngine SDL2-static/target_link_libraries(RetroEngine SDL2main SDL2-static/' Game/dependencies/RSDKv5/platforms/iOS.cmake
-          echo "=== patched link line"; grep -n "target_link_libraries(RetroEngine" Game/dependencies/RSDKv5/platforms/iOS.cmake
-      - name: IOSBUILD configure v9
+          R=Game/dependencies/RSDKv5/RSDKv5/RSDK/Graphics/SDL2/SDL2RenderDevice.cpp
+          sed -i 's/int flags = SDL_WINDOW_METAL;/int flags = SDL_WINDOW_OPENGL;/' $R
+          echo "=== window flags line after patch"; grep -n "int flags = " $R
+      - name: IOSBUILD configure v10
         run: |
           mkdir -p stubs
           printf '#ifndef AVAIL_VERSIONS_STUB_H\n#define AVAIL_VERSIONS_STUB_H\n#endif\n' > stubs/AvailabilityVersions.h
@@ -50,19 +51,17 @@ jobs:
             -DCMAKE_EXE_LINKER_FLAGS="--target=armv7s-apple-ios8.0 -isysroot $SDK -fuse-ld=$GITHUB_WORKSPACE/theos/toolchain/linux/iphone/bin/ld -nostdlib -lgcc_s.1 -lobjc $PWD/stubs/platver.o -Wl,-undefined,dynamic_lookup" \
             -DPLATFORM=iOS -DGAME_STATIC=ON -DRETRO_MOD_LOADER=OFF -DWITH_RSDK=ON > configure.log 2>&1 || (tail -30 configure.log; exit 1)
           tail -3 configure.log
-      - name: IOSBUILD patch flags v9
+      - name: IOSBUILD patch flags v10
         run: |
           F=$(find build -path "*SDL2-static.dir/flags.make" | head -1)
           sed -i 's/-std=gnu++17//g' $F || true
           R=$(find build -path "*RetroEngine.dir/flags.make" | head -1)
           sed -i -E 's/-std=(gnu|c)\+\+(11|98|03)/-std=gnu++17/g' $R
-      - name: IOSBUILD compile v9
+      - name: IOSBUILD compile v10
         run: |
           cmake --build build -j4 -- -k > build.log 2>&1 || echo "BUILD FAILED"
           echo "=== distinct compile errors"; grep -E "error:" build.log | sed 's#/home/runner/work/RSDKv5-Decompilation/RSDKv5-Decompilation/##' | sort -u | head -15 | cut -c1-230 || true
           echo "=== ALL distinct undefined symbols"; grep -E '^  "' build.log | sed 's/, referenced from.*//' | sort -u | head -40 || true
-          echo "=== who references the personality symbol"; grep -A6 'gxx_personality' build.log | head -14 | cut -c1-200 || true
-          echo "=== linker lines"; grep -E "^ld:|ld: " build.log | sort -u | head -12 | cut -c1-220 || true
           echo "=== any binary produced?"; find build -type f -name RSDKv5U | head
       - name: IOSBUILD package
         run: |
@@ -84,8 +83,8 @@ jobs:
               <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
               <key>CFBundleName</key><string>Sonic Mania</string>
               <key>CFBundlePackageType</key><string>APPL</string>
-              <key>CFBundleShortVersionString</key><string>0.1</string>
-              <key>CFBundleVersion</key><string>1</string>
+              <key>CFBundleShortVersionString</key><string>0.2</string>
+              <key>CFBundleVersion</key><string>2</string>
               <key>LSRequiresIPhoneOS</key><true/>
               <key>MinimumOSVersion</key><string>8.0</string>
               <key>UIDeviceFamily</key><array><integer>1</integer><integer>2</integer></array>
@@ -102,7 +101,7 @@ jobs:
           cat > deb/DEBIAN/control <<'EOF'
           Package: com.rameboi.sonicmania
           Name: Sonic Mania
-          Version: 0.1
+          Version: 0.2
           Architecture: iphoneos-arm
           Description: Sonic Mania (RSDKv5) port for iOS 8
           Maintainer: RameBoi
