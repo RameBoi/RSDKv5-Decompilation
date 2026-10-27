@@ -15,14 +15,14 @@ decl = r"""struct IOSCircle {
     float x, y, r;
 };
 
-extern IOSCircle iosLayout[10];
-extern bool32 iosHeld[10];
+extern IOSCircle iosLayout[12];
+extern bool32 iosHeld[12];
 extern bool32 iosDir[4];
 extern bool32 iosStickOn;
 extern float iosKnobX, iosKnobY;
 extern float iosScale, iosOpacity;
 extern float iosPos[4][2];
-extern int32 iosHide, iosEdit, iosPadMode, iosDragIdx;
+extern int32 iosHide, iosEdit, iosPadMode, iosDragIdx, iosFps, iosStrip;
 extern int32 iosScreenW, iosScreenH;
 void IOSComputeLayout();
 void IOSTouchUpdate();
@@ -33,8 +33,8 @@ void ProcessInputReal();
 logic = r"""#include <math.h>
 #include <stdio.h>
 
-RSDK::IOSCircle RSDK::iosLayout[10];
-bool32 RSDK::iosHeld[10] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+RSDK::IOSCircle RSDK::iosLayout[12];
+bool32 RSDK::iosHeld[12] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
 bool32 RSDK::iosDir[4]   = { 0, 0, 0, 0 };
 bool32 RSDK::iosStickOn  = false;
 float RSDK::iosKnobX     = 0;
@@ -46,6 +46,8 @@ int32 RSDK::iosHide      = 0;
 int32 RSDK::iosEdit      = 0;
 int32 RSDK::iosPadMode   = 0;
 int32 RSDK::iosDragIdx   = -1;
+int32 RSDK::iosFps       = 1;
+int32 RSDK::iosStrip     = 1;
 int32 RSDK::iosScreenW   = 2048;
 int32 RSDK::iosScreenH   = 1536;
 
@@ -56,7 +58,8 @@ static void IOSCfgSave()
     FILE *f = fopen(path, "w");
     if (!f)
         return;
-    fprintf(f, "scale=%.2f\nopacity=%.2f\nhide=%d\npad=%d\n", RSDK::iosScale, RSDK::iosOpacity, (int)RSDK::iosHide, (int)RSDK::iosPadMode);
+    fprintf(f, "scale=%.2f\nopacity=%.2f\nhide=%d\npad=%d\nfps=%d\nstrip=%d\n", RSDK::iosScale, RSDK::iosOpacity, (int)RSDK::iosHide, (int)RSDK::iosPadMode,
+            (int)RSDK::iosFps, (int)RSDK::iosStrip);
     for (int i = 0; i < 4; ++i)
         fprintf(f, "pos%d=%.4f,%.4f\n", i, RSDK::iosPos[i][0], RSDK::iosPos[i][1]);
     fclose(f);
@@ -83,6 +86,10 @@ static void IOSCfgLoad()
             RSDK::iosHide = v > 0.5f ? 1 : 0;
         else if (sscanf(line, "pad=%f", &v) == 1)
             RSDK::iosPadMode = v > 0.5f ? 1 : 0;
+        else if (sscanf(line, "fps=%f", &v) == 1)
+            RSDK::iosFps = v > 0.5f ? 1 : 0;
+        else if (sscanf(line, "strip=%f", &v) == 1)
+            RSDK::iosStrip = v > 0.5f ? 1 : 0;
         else if (sscanf(line, "pos%d=%f,%f", &i, &v, &w) == 3 && i >= 0 && i < 4) {
             RSDK::iosPos[i][0] = v;
             RSDK::iosPos[i][1] = w;
@@ -135,28 +142,26 @@ void RSDK::IOSComputeLayout()
         }
     }
 
-    // top-right strip, right to left: eye, plus, minus, move, pad-mode
-    iosLayout[6].r = rSmall;
-    iosLayout[6].x = W - m * 0.6f - rSmall;
-    iosLayout[6].y = m * 0.5f + rSmall;
-    iosLayout[5].r = rSmall;
-    iosLayout[5].x = iosLayout[6].x - rSmall * 2.8f;
-    iosLayout[5].y = iosLayout[6].y;
-    iosLayout[4].r = rSmall;
-    iosLayout[4].x = iosLayout[5].x - rSmall * 2.8f;
-    iosLayout[4].y = iosLayout[6].y;
-    iosLayout[7].r = rSmall;
-    iosLayout[7].x = iosLayout[4].x - rSmall * 2.8f;
-    iosLayout[7].y = iosLayout[6].y;
-    iosLayout[8].r = rSmall;
-    iosLayout[8].x = iosLayout[7].x - rSmall * 2.8f;
-    iosLayout[8].y = iosLayout[6].y;
+    // top-right strip, right to left: handle, eye, plus, minus, move, pad-mode, fps
+    float sy = m * 0.5f + rSmall;
+    float sg = rSmall * 2.8f;
+    iosLayout[10].x = W - m * 0.6f - rSmall;
+    iosLayout[6].x  = iosLayout[10].x - sg;
+    iosLayout[5].x  = iosLayout[6].x - sg;
+    iosLayout[4].x  = iosLayout[5].x - sg;
+    iosLayout[7].x  = iosLayout[4].x - sg;
+    iosLayout[8].x  = iosLayout[7].x - sg;
+    iosLayout[9].x  = iosLayout[8].x - sg;
+    for (int32 i = 4; i < 11; ++i) {
+        iosLayout[i].y = sy;
+        iosLayout[i].r = rSmall;
+    }
 }
 
 void RSDK::IOSTouchUpdate()
 {
     static bool32 loaded     = false;
-    static bool32 prev[10]   = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+    static bool32 prev[12]   = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
     static bool32 prevDir[4] = { 0, 0, 0, 0 };
     static int32 prevMask    = 0;
     static float dragOffX    = 0;
@@ -170,7 +175,7 @@ void RSDK::IOSTouchUpdate()
     float W = (float)iosScreenW;
     float H = (float)iosScreenH;
 
-    bool32 now[10] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+    bool32 now[12] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
     bool32 dir[4]  = { 0, 0, 0, 0 }; // up, down, left, right
     bool32 stickOn = false;
     float knobX    = iosLayout[0].x;
@@ -185,8 +190,10 @@ void RSDK::IOSTouchUpdate()
         float px = touchInfo.x[t] * W;
         float py = touchInfo.y[t] * H;
 
-        for (int32 b = 1; b < 9; ++b) {
-            if (iosHide && b != 6)
+        for (int32 b = 1; b < 11; ++b) {
+            if (b >= 4 && b <= 9 && !iosStrip)
+                continue;
+            if (iosHide && b != 6 && b != 10)
                 continue;
             if (iosEdit && b < 4)
                 continue;
@@ -310,6 +317,16 @@ void RSDK::IOSTouchUpdate()
         iosPadMode = iosPadMode ? 0 : 1;
         IOSCfgSave();
     }
+    if (now[9] && !prev[9]) {
+        iosFps = iosFps ? 0 : 1;
+        IOSCfgSave();
+    }
+    if (now[10] && !prev[10]) {
+        iosStrip = iosStrip ? 0 : 1;
+        if (!iosStrip)
+            iosEdit = 0;
+        IOSCfgSave();
+    }
 
     int32 mask = 0;
     for (int32 d = 0; d < 4; ++d) {
@@ -345,7 +362,7 @@ void RSDK::IOSTouchUpdate()
         apply(&controller[0].keyStart, &controller[1].keyStart, now[3], prev[3]);
     }
 
-    for (int32 b = 0; b < 10; ++b) {
+    for (int32 b = 0; b < 12; ++b) {
         prev[b]    = now[b];
         iosHeld[b] = now[b];
     }
@@ -377,9 +394,21 @@ draw = r"""    {
         iosScreenW = W;
         iosScreenH = H;
         IOSComputeLayout();
+        static Uint32 fpsLast = 0;
+        static int fpsFrames  = 0;
+        static int fpsShown   = 0;
+        Uint32 nowT           = SDL_GetTicks();
+        ++fpsFrames;
+        if (fpsLast == 0)
+            fpsLast = nowT;
+        if (nowT - fpsLast >= 500) {
+            fpsShown  = (int)((fpsFrames * 1000) / (nowT - fpsLast));
+            fpsFrames = 0;
+            fpsLast   = nowT;
+        }
         if (!iosLogged) {
             iosLogged = true;
-            PrintLog(PRINT_NORMAL, "IOSOVERLAY v0.6 screen=%dx%d", W, H);
+            PrintLog(PRINT_NORMAL, "IOSOVERLAY v0.7 screen=%dx%d", W, H);
         }
 
         if (iosTexOwner != renderer) {
@@ -483,35 +512,98 @@ draw = r"""    {
                     }
                 }
 
-                for (int b = 4; b < 9; ++b) {
-                    IOSCircle &c = iosLayout[b];
-                    bool lit     = iosHeld[b] || (b == 7 && iosEdit);
-                    drawTex(iosDisc, c.x, c.y, c.r, lit ? op * 1.5f : op * 0.4f);
+            }
+            if (iosStrip) {
+                if (!iosHide) {
+                    const int sb[5] = { 4, 5, 7, 8, 9 };
+                    for (int k = 0; k < 5; ++k) {
+                        int b        = sb[k];
+                        IOSCircle &c = iosLayout[b];
+                        bool lit     = iosHeld[b] || (b == 7 && iosEdit) || (b == 9 && iosFps);
+                        drawTex(iosDisc, c.x, c.y, c.r, lit ? op * 1.5f : op * 0.4f);
+                    }
+                    IOSCircle &mi = iosLayout[4];
+                    IOSCircle &pl = iosLayout[5];
+                    IOSCircle &mv = iosLayout[7];
+                    IOSCircle &pm = iosLayout[8];
+                    IOSCircle &fp = iosLayout[9];
+                    bar(mi.x, mi.y, mi.r * 1.0f, mi.r * 0.2f, op * 2.2f);
+                    bar(pl.x, pl.y, pl.r * 1.0f, pl.r * 0.2f, op * 2.2f);
+                    bar(pl.x, pl.y, pl.r * 0.2f, pl.r * 1.0f, op * 2.2f);
+                    for (int d = 0; d < 4; ++d) {
+                        float dx = d == 2 ? -1.0f : (d == 3 ? 1.0f : 0.0f);
+                        float dy = d == 0 ? -1.0f : (d == 1 ? 1.0f : 0.0f);
+                        drawTex(iosDisc, mv.x + dx * mv.r * 0.55f, mv.y + dy * mv.r * 0.55f, mv.r * 0.17f, op * 2.4f);
+                    }
+                    if (iosPadMode) {
+                        bar(pm.x, pm.y, pm.r * 1.0f, pm.r * 0.28f, op * 2.2f);
+                        bar(pm.x, pm.y, pm.r * 0.28f, pm.r * 1.0f, op * 2.2f);
+                    }
+                    else {
+                        drawTex(iosDisc, pm.x, pm.y, pm.r * 0.4f, op * 2.2f);
+                    }
+                    const float bh[3] = { 0.5f, 0.9f, 0.7f };
+                    for (int k = 0; k < 3; ++k)
+                        bar(fp.x + (k - 1) * fp.r * 0.45f, fp.y + fp.r * 0.45f - fp.r * bh[k] / 2.0f, fp.r * 0.28f, fp.r * bh[k], op * 2.4f);
                 }
-                IOSCircle &mi = iosLayout[4];
-                IOSCircle &pl = iosLayout[5];
-                IOSCircle &mv = iosLayout[7];
-                IOSCircle &pm = iosLayout[8];
-                bar(mi.x, mi.y, mi.r * 1.0f, mi.r * 0.2f, op * 2.2f);
-                bar(pl.x, pl.y, pl.r * 1.0f, pl.r * 0.2f, op * 2.2f);
-                bar(pl.x, pl.y, pl.r * 0.2f, pl.r * 1.0f, op * 2.2f);
-                for (int d = 0; d < 4; ++d) {
-                    float dx = d == 2 ? -1.0f : (d == 3 ? 1.0f : 0.0f);
-                    float dy = d == 0 ? -1.0f : (d == 1 ? 1.0f : 0.0f);
-                    drawTex(iosDisc, mv.x + dx * mv.r * 0.55f, mv.y + dy * mv.r * 0.55f, mv.r * 0.17f, op * 2.4f);
-                }
-                if (iosPadMode) {
-                    bar(pm.x, pm.y, pm.r * 1.0f, pm.r * 0.28f, op * 2.2f);
-                    bar(pm.x, pm.y, pm.r * 0.28f, pm.r * 1.0f, op * 2.2f);
-                }
-                else {
-                    drawTex(iosDisc, pm.x, pm.y, pm.r * 0.4f, op * 2.2f);
+                IOSCircle &ey = iosLayout[6];
+                float ea      = iosHide ? op * 0.8f : op * 1.4f;
+                drawTex(iosRing, ey.x, ey.y, ey.r, ea);
+                drawTex(iosDisc, ey.x, ey.y, ey.r * 0.38f, iosHeld[6] ? ea * 1.5f : ea);
+            }
+
+            IOSCircle &hd = iosLayout[10];
+            if (iosStrip) {
+                drawTex(iosDisc, hd.x, hd.y, hd.r, iosHeld[10] ? op * 1.5f : op * 0.4f);
+                for (int k = -1; k <= 1; ++k)
+                    drawTex(iosDisc, hd.x + k * hd.r * 0.5f, hd.y, hd.r * 0.14f, op * 2.4f);
+            }
+            else {
+                drawTex(iosRing, hd.x, hd.y, hd.r * 0.5f, op * 0.9f);
+                drawTex(iosDisc, hd.x, hd.y, hd.r * 0.2f, op * 0.9f);
+            }
+
+            if (iosFps) {
+                static const unsigned short fpsFont[10] = { 0x7B6F, 0x2C97, 0x73E7, 0x73CF, 0x5BC9, 0x79CF, 0x79EF, 0x7249, 0x7BEF, 0x7BCF };
+                int val = fpsShown;
+                if (val > 999)
+                    val = 999;
+                int digits[3];
+                int nd = 0;
+                if (val >= 100)
+                    digits[nd++] = val / 100;
+                if (val >= 10)
+                    digits[nd++] = (val / 10) % 10;
+                digits[nd++] = val % 10;
+                int ps = H / 170;
+                if (ps < 3)
+                    ps = 3;
+                int x0 = (int)(0.025f * H);
+                int y0 = (int)(0.02f * H);
+                SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+                SDL_SetRenderDrawColor(renderer, 0, 0, 0, 120);
+                SDL_Rect bg;
+                bg.x = x0 - ps;
+                bg.y = y0 - ps;
+                bg.w = nd * 4 * ps + ps;
+                bg.h = 7 * ps;
+                SDL_RenderFillRect(renderer, &bg);
+                SDL_SetRenderDrawColor(renderer, 255, 255, 255, 230);
+                for (int i = 0; i < nd; ++i) {
+                    for (int row = 0; row < 5; ++row) {
+                        for (int col = 0; col < 3; ++col) {
+                            if (fpsFont[digits[i]] & (1 << (14 - (row * 3 + col)))) {
+                                SDL_Rect cell;
+                                cell.x = x0 + i * 4 * ps + col * ps;
+                                cell.y = y0 + row * ps;
+                                cell.w = ps;
+                                cell.h = ps;
+                                SDL_RenderFillRect(renderer, &cell);
+                            }
+                        }
+                    }
                 }
             }
-            IOSCircle &ey = iosLayout[6];
-            float ea      = iosHide ? op * 0.8f : op * 1.4f;
-            drawTex(iosRing, ey.x, ey.y, ey.r, ea);
-            drawTex(iosDisc, ey.x, ey.y, ey.r * 0.38f, iosHeld[6] ? ea * 1.5f : ea);
         }
     }
 """
