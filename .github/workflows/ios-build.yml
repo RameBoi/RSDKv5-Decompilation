@@ -3,7 +3,7 @@ on:
   push:
     branches: [ios]
 env:
-  MODS: "OFF"
+  MODS: "ON"
 jobs:
   ios-build:
     runs-on: ubuntu-latest
