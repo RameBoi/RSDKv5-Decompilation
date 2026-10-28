@@ -24,8 +24,12 @@ jobs:
           sed -i 's/target_link_libraries(RetroEngine SDL2-static/target_link_libraries(RetroEngine SDL2main SDL2-static/' Game/dependencies/RSDKv5/platforms/iOS.cmake
           R=Game/dependencies/RSDKv5/RSDKv5/RSDK/Graphics/SDL2/SDL2RenderDevice.cpp
           sed -i 's/int flags = SDL_WINDOW_METAL;/int flags = SDL_WINDOW_OPENGL;/' $R
-      - name: Add touch controls v0.6
+      - name: Add touch controls
         run: python3 tools/touch_patch.py
+      - name: Enable mod loader for iOS
+        run: |
+          python3 tools/mod_patch.py
+          printf '\nset_source_files_properties(RSDKv5/RSDK/Core/ModAPI.cpp PROPERTIES COMPILE_FLAGS "-fexceptions -frtti")\n' >> Game/dependencies/RSDKv5/platforms/iOS.cmake
       - name: IOSBUILD configure
         run: |
           mkdir -p stubs
@@ -50,7 +54,7 @@ jobs:
             -DCMAKE_C_FLAGS="$CF" -DCMAKE_CXX_FLAGS="$CF $CXXF" \
             -DCMAKE_OBJC_FLAGS="$CF" -DCMAKE_OBJCXX_FLAGS="$CF $CXXF" \
             -DCMAKE_EXE_LINKER_FLAGS="--target=armv7s-apple-ios8.0 -isysroot $SDK -fuse-ld=$GITHUB_WORKSPACE/theos/toolchain/linux/iphone/bin/ld -nostdlib -lgcc_s.1 -lobjc $PWD/stubs/platver.o -Wl,-undefined,dynamic_lookup" \
-            -DPLATFORM=iOS -DGAME_STATIC=ON -DRETRO_MOD_LOADER=OFF -DWITH_RSDK=ON > configure.log 2>&1 || (tail -30 configure.log; exit 1)
+            -DPLATFORM=iOS -DGAME_STATIC=ON -DRETRO_MOD_LOADER=ON -DWITH_RSDK=ON > configure.log 2>&1 || (tail -30 configure.log; exit 1)
           F=$(find build -path "*SDL2-static.dir/flags.make" | head -1)
           sed -i 's/-std=gnu++17//g' $F || true
           R=$(find build -path "*RetroEngine.dir/flags.make" | head -1)
@@ -58,8 +62,24 @@ jobs:
       - name: IOSBUILD compile
         run: |
           cmake --build build -j4 -- -k > build.log 2>&1 || echo "BUILD FAILED"
-          grep -E "error:" build.log | sed 's#/home/runner/work/RSDKv5-Decompilation/RSDKv5-Decompilation/##' | sort -u | head -15 | cut -c1-230 || true
+          grep -E "error:" build.log | sed 's#/home/runner/work/RSDKv5-Decompilation/RSDKv5-Decompilation/##' | sort -u | head -20 | cut -c1-230 || true
+          grep -E "Undefined symbols" -A12 build.log | head -30 | cut -c1-200 || true
           find build -type f -name RSDKv5U | head
+      - name: IOSBUILD runtime symbol check
+        run: |
+          BIN=$(find build -type f -name RSDKv5U | head -1)
+          if [ -z "$BIN" ]; then echo "no binary"; exit 0; fi
+          /usr/lib/llvm-18/bin/llvm-nm -u "$BIN" | awk '{print $NF}' | sort -u > undef.txt || true
+          python3 - <<'PY' || true
+          import re, glob
+          known = set()
+          for f in glob.glob("sdks/iPhoneOS10.3.sdk/usr/lib/**/*.tbd", recursive=True):
+              known.update(re.findall(r"[^\s,\[\]']+", open(f, errors="ignore").read()))
+          missing = [l.strip() for l in open("undef.txt") if l.strip() and l.strip() not in known]
+          print("undefined symbols not found in any SDK library:", len(missing))
+          for m in missing[:60]:
+              print(m)
+          PY
       - name: IOSBUILD package
         run: |
           BIN=$(find build -type f -name RSDKv5U | head -1)
@@ -79,8 +99,8 @@ jobs:
               <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
               <key>CFBundleName</key><string>Sonic Mania</string>
               <key>CFBundlePackageType</key><string>APPL</string>
-              <key>CFBundleShortVersionString</key><string>0.6</string>
-              <key>CFBundleVersion</key><string>6</string>
+              <key>CFBundleShortVersionString</key><string>0.8</string>
+              <key>CFBundleVersion</key><string>8</string>
               <key>LSRequiresIPhoneOS</key><true/>
               <key>MinimumOSVersion</key><string>8.0</string>
               <key>UIDeviceFamily</key><array><integer>1</integer><integer>2</integer></array>
@@ -97,7 +117,7 @@ jobs:
           cat > deb/DEBIAN/control <<'EOF'
           Package: com.rameboi.sonicmania
           Name: Sonic Mania
-          Version: 0.6
+          Version: 0.8
           Architecture: iphoneos-arm
           Description: Sonic Mania (RSDKv5) port for iOS 8
           Maintainer: RameBoi
