@@ -13,21 +13,22 @@ We do not condone using this project as a means for piracy in any form. This pro
 * Added a built-in shader compiler for backends/platforms that support it.
 * Added various other backends to windows aside from the usual DirectX 9 backends
 
-# How to Build
+# How to Build (IOS 32 BIT)
 
 ## Get the source code
 
-* Clone the repo **recursively**, using:
-```git clone --recursive https://github.com/Rubberduckycooly/RSDKv5-Decompilation.git```
-or if you've already cloned the repo, run inside:
-```git submodule update --init```
+Clone the repo
+FIRST: ENABLE WORKFLOWS IF NOT ALREADY BUT IT SHOULD
+go into the ios branch.
+go into .github/workflows and make a file called ios-build.yml.
+import this code into it im attaching a link:
+https://clipboardnow.com/view-paste/?id=1bc298c15b
+now click on it again and click view runs.
+let it run.
+when it finishes, go to summary, scroll down, and download the zip.
 
-## Follow the build steps
+the fully compiled version is available on bag-xml discord.
 
-* [Windows](./dependencies/windows/README.md)
-* [Mac](./dependencies/mac/README.md)
-* [Linux/Switch](./dependencies/ogl/README.md)
-* [Android](./dependencies/android/README.md)
 
 ## Other Platforms
 Currently, the only officially supported platforms are the ones listed above. However, the backend is very modular, so the codebase is very multiplatform.
