@@ -2,6 +2,8 @@ name: ios-build
 on:
   push:
     branches: [ios]
+env:
+  MODS: "OFF"
 jobs:
   ios-build:
     runs-on: ubuntu-latest
@@ -22,11 +24,42 @@ jobs:
           mkdir -p Game/dependencies/RSDKv5
           tar --exclude=./Game --exclude=./.git --exclude=./sdks --exclude=./theos -cf - . | tar -xf - -C Game/dependencies/RSDKv5
           sed -i 's/target_link_libraries(RetroEngine SDL2-static/target_link_libraries(RetroEngine SDL2main SDL2-static/' Game/dependencies/RSDKv5/platforms/iOS.cmake
+          sed -i 's/"-framework GameController"/"-Wl,-weak_framework,GameController"/' Game/dependencies/RSDKv5/platforms/iOS.cmake
+          grep -n "weak_framework" Game/dependencies/RSDKv5/platforms/iOS.cmake
           R=Game/dependencies/RSDKv5/RSDKv5/RSDK/Graphics/SDL2/SDL2RenderDevice.cpp
           sed -i 's/int flags = SDL_WINDOW_METAL;/int flags = SDL_WINDOW_OPENGL;/' $R
       - name: Add touch controls
         run: python3 tools/touch_patch.py
+      - name: Scale controls for small screens
+        run: |
+          python3 - <<'PY'
+          base = "Game/dependencies/RSDKv5/RSDKv5/RSDK/"
+
+          def sub(path, old, new):
+              s = open(path, newline="").read()
+              if s.count(old) != 1:
+                  raise SystemExit("SCALE PATCH FAILED (%d matches) in %s for %r" % (s.count(old), path, old))
+              open(path, "w", newline="").write(s.replace(old, new))
+
+          sub(base + "Input/Input.hpp", "extern int32 iosScreenW, iosScreenH;", "extern int32 iosScreenW, iosScreenH;\nextern float iosUnit;")
+          sub(base + "Input/Input.cpp", "int32 RSDK::iosScreenH   = 1536;", "int32 RSDK::iosScreenH   = 1536;\nfloat RSDK::iosUnit      = 1.0f;")
+          sub(base + "Input/Input.cpp", "    float s = iosScale;", "    float s = iosScale * iosUnit;")
+          sub(base + "Input/Input.cpp", "    float rSmall = 0.026f * H;", "    float rSmall = 0.026f * H * iosUnit;")
+          sub(base + "Graphics/SDL2/SDL2RenderDevice.cpp", "        IOSComputeLayout();\n        static Uint32 fpsLast", """        {
+                      static float dpi = 0.0f;
+                      if (dpi == 0.0f) {
+                          float dd = 0, hh = 0, vv = 0;
+                          dpi = (SDL_GetDisplayDPI(0, &dd, &hh, &vv) == 0 && vv > 50.0f) ? vv : 264.0f;
+                      }
+                      float u = 5.8f / ((float)H / dpi);
+                      iosUnit = u < 1.0f ? 1.0f : (u > 2.2f ? 2.2f : u);
+                  }
+                  IOSComputeLayout();
+                  static Uint32 fpsLast""")
+          print("scale patch ok")
+          PY
       - name: Enable mod loader for iOS
+        if: env.MODS == 'ON'
         run: |
           python3 tools/mod_patch.py
           printf '\nset_source_files_properties(RSDKv5/RSDK/Core/ModAPI.cpp PROPERTIES COMPILE_FLAGS "-fexceptions -frtti")\n' >> Game/dependencies/RSDKv5/platforms/iOS.cmake
@@ -36,14 +69,34 @@ jobs:
         run: |
           mkdir -p stubs
           printf '#ifndef AVAIL_VERSIONS_STUB_H\n#define AVAIL_VERSIONS_STUB_H\n#endif\n' > stubs/AvailabilityVersions.h
-          cat > stubs/platver.c <<'EOF'
-          typedef unsigned int u32;
-          int __isPlatformVersionAtLeast(u32 platform, u32 major, u32 minor, u32 sub) { return major <= 8; }
+          cat > stubs/platver.m <<'EOF'
+          #import <UIKit/UIKit.h>
+          #include <stdio.h>
+          int __isPlatformVersionAtLeast(unsigned int platform, unsigned int major, unsigned int minor, unsigned int sub)
+          {
+              static int cur[3] = { -1, 0, 0 };
+              if (cur[0] < 0) {
+                  NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
+                  const char *v = [[[UIDevice currentDevice] systemVersion] UTF8String];
+                  int a = 0, b = 0, c = 0;
+                  sscanf(v, "%d.%d.%d", &a, &b, &c);
+                  cur[1] = b;
+                  cur[2] = c;
+                  cur[0] = a;
+                  [pool release];
+              }
+              if (cur[0] != (int)major)
+                  return cur[0] > (int)major;
+              if (cur[1] != (int)minor)
+                  return cur[1] > (int)minor;
+              return cur[2] >= (int)sub;
+          }
           EOF
           LB=/usr/lib/llvm-18/bin
           SDK=$PWD/sdks/iPhoneOS10.3.sdk
-          clang --target=armv7s-apple-ios8.0 -isysroot $SDK -w -c stubs/platver.c -o stubs/platver.o
-          CF="--target=armv7s-apple-ios8.0 -isysroot $SDK -w -I$PWD/stubs -UGAME_INCLUDE_EDITOR"
+          T=armv7-apple-ios6.0
+          clang --target=$T -isysroot $SDK -w -c stubs/platver.m -o stubs/platver.o
+          CF="--target=$T -isysroot $SDK -w -I$PWD/stubs -UGAME_INCLUDE_EDITOR"
           CXXF="-nostdinc++ -isystem /usr/lib/llvm-18/include/c++/v1 -fno-exceptions -fno-rtti"
           cmake -S Game -B build \
             -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_SYSROOT=$SDK -DCMAKE_SYSROOT=$SDK \
@@ -55,8 +108,8 @@ jobs:
             -DCMAKE_NM=$LB/llvm-nm -DCMAKE_STRIP=$LB/llvm-strip -DCMAKE_OBJDUMP=$LB/llvm-objdump \
             -DCMAKE_C_FLAGS="$CF" -DCMAKE_CXX_FLAGS="$CF $CXXF" \
             -DCMAKE_OBJC_FLAGS="$CF" -DCMAKE_OBJCXX_FLAGS="$CF $CXXF" \
-            -DCMAKE_EXE_LINKER_FLAGS="--target=armv7s-apple-ios8.0 -isysroot $SDK -fuse-ld=$GITHUB_WORKSPACE/theos/toolchain/linux/iphone/bin/ld -nostdlib -lgcc_s.1 -lobjc $PWD/stubs/platver.o -Wl,-undefined,dynamic_lookup" \
-            -DPLATFORM=iOS -DGAME_STATIC=ON -DRETRO_MOD_LOADER=ON -DWITH_RSDK=ON > configure.log 2>&1 || (tail -30 configure.log; exit 1)
+            -DCMAKE_EXE_LINKER_FLAGS="--target=$T -isysroot $SDK -fuse-ld=$GITHUB_WORKSPACE/theos/toolchain/linux/iphone/bin/ld -nostdlib -lgcc_s.1 -lobjc $PWD/stubs/platver.o -Wl,-undefined,dynamic_lookup" \
+            -DPLATFORM=iOS -DGAME_STATIC=ON -DRETRO_MOD_LOADER=$MODS -DWITH_RSDK=ON > configure.log 2>&1 || (tail -30 configure.log; exit 1)
           F=$(find build -path "*SDL2-static.dir/flags.make" | head -1)
           sed -i 's/-std=gnu++17//g' $F || true
           R=$(find build -path "*RetroEngine.dir/flags.make" | head -1)
@@ -67,32 +120,25 @@ jobs:
           grep -E "error:" build.log | sed 's#/home/runner/work/RSDKv5-Decompilation/RSDKv5-Decompilation/##' | sort -u | head -20 | cut -c1-230 || true
           grep -E "Undefined symbols" -A12 build.log | head -30 | cut -c1-200 || true
           find build -type f -name RSDKv5U | head
-      - name: IOSBUILD runtime symbol check
-        run: |
-          BIN=$(find build -type f -name RSDKv5U | head -1)
-          if [ -z "$BIN" ]; then echo "no binary"; exit 0; fi
-          /usr/lib/llvm-18/bin/llvm-nm -u "$BIN" | awk '{print $NF}' | sort -u > undef.txt || true
-          python3 - <<'PY' || true
-          import re, glob
-          known = set()
-          for f in glob.glob("sdks/iPhoneOS10.3.sdk/**/*.tbd", recursive=True):
-              for t in re.findall(r"[^\s,\[\]']+", open(f, errors="ignore").read()):
-                  known.add(t)
-                  for p in ("_OBJC_CLASS_$_", "_OBJC_METACLASS_$_", "_OBJC_EHTYPE_$_"):
-                      known.add(p + t)
-          missing = [l.strip() for l in open("undef.txt") if l.strip() and l.strip() not in known]
-          print("undefined symbols not found in any SDK library:", len(missing))
-          for m in missing[:80]:
-              print("  MISSING", m)
-          PY
       - name: IOSBUILD package
         run: |
           BIN=$(find build -type f -name RSDKv5U | head -1)
           if [ -z "$BIN" ]; then echo "no binary yet, skipping package"; exit 0; fi
+          file "$BIN"
           APP=out/Payload/RSDKv5U.app
           mkdir -p $APP
           cp "$BIN" $APP/RSDKv5U
           cp dependencies/ios/Default.png $APP/ 2>/dev/null || true
+          python3 - <<'PY'
+          import zlib, struct
+          def chunk(t, d):
+              c = struct.pack('>I', len(d)) + t + d
+              return c + struct.pack('>I', zlib.crc32(t + d) & 0xffffffff)
+          w, h = 640, 1136
+          raw = b''.join(b'\x00' + b'\x00\x00\x00' * w for _ in range(h))
+          data = b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', w, h, 8, 2, 0, 0, 0)) + chunk(b'IDAT', zlib.compress(raw, 9)) + chunk(b'IEND', b'')
+          open('out/Payload/RSDKv5U.app/Default-568h@2x.png', 'wb').write(data)
+          PY
           cat > $APP/Info.plist <<'EOF'
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -104,10 +150,10 @@ jobs:
               <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
               <key>CFBundleName</key><string>Sonic Mania</string>
               <key>CFBundlePackageType</key><string>APPL</string>
-              <key>CFBundleShortVersionString</key><string>0.9</string>
-              <key>CFBundleVersion</key><string>9</string>
+              <key>CFBundleShortVersionString</key><string>1.0</string>
+              <key>CFBundleVersion</key><string>10</string>
               <key>LSRequiresIPhoneOS</key><true/>
-              <key>MinimumOSVersion</key><string>8.0</string>
+              <key>MinimumOSVersion</key><string>6.0</string>
               <key>UIDeviceFamily</key><array><integer>1</integer><integer>2</integer></array>
               <key>UIRequiredDeviceCapabilities</key><array><string>armv7</string></array>
               <key>UISupportedInterfaceOrientations</key><array><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>
@@ -122,12 +168,12 @@ jobs:
           cat > deb/DEBIAN/control <<'EOF'
           Package: com.rameboi.sonicmania
           Name: Sonic Mania
-          Version: 0.9
+          Version: 1.0
           Architecture: iphoneos-arm
-          Description: Sonic Mania (RSDKv5) port for iOS 8
+          Description: Sonic Mania (RSDKv5) port for 32-bit iOS 6 and up
           Maintainer: RameBoi
           Section: Games
-          Depends: firmware (>= 8.0)
+          Depends: firmware (>= 6.0)
           EOF
           printf '#!/bin/sh\nchmod -R 755 /Applications/RSDKv5U.app\nuicache\nexit 0\n' > deb/DEBIAN/postinst
           chmod 755 deb/DEBIAN/postinst
