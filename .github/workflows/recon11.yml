@@ -1,1 +1,23 @@
-
+name: recon11
+on:
+  push:
+    branches: [ios]
+jobs:
+  recon11:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: RECON11 mod loader code
+        run: |
+          M=RSDKv5/RSDK/Core/ModAPI.cpp
+          H=RSDKv5/RSDK/Core/ModAPI.hpp
+          echo "=== ModAPI.cpp lines 1-60"; sed -n 1,60p $M
+          echo "=== fs namespace in ModAPI.hpp"; grep -n "namespace fs\|struct filesystem_error\|path_list\|struct path\|directory_entry\|directory_iterator" $H | head -30
+          echo "=== ModAPI.hpp 425-520"; sed -n 425,520p $H
+          echo "=== every try/catch and fs:: use with context"; grep -n -B2 -A3 "try {\|catch (" $M | head -90
+          echo "=== iOS block"; sed -n 340,366p $M
+          echo "=== mod folder paths"; grep -n "modDir\b.*=\|\"mods\|mods/" $M | head -20
+          echo "=== dynamic library loading"; grep -n "GetSymbol\|Link::Open\|modLogicHandles\|\.dylib\|\.so\"\|\.dll\|dlopen" $M | head -20
+          echo "=== Link handle implementation"; grep -n -B1 -A12 "namespace Link" RSDKv5/RSDK/Core/Link.hpp | head -50
+          echo "=== other try/catch in engine"; grep -rn "try *{" RSDKv5 --include=*.cpp --include=*.hpp | head
+          echo "=== modloader cmake options"; grep -n "MOD_LOADER" CMakeLists.txt platforms/*.cmake | head
