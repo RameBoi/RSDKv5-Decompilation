@@ -1,0 +1,53 @@
+name: symcheck
+on:
+  push:
+    branches: [ios]
+permissions:
+  actions: read
+  contents: read
+jobs:
+  symcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download the two newest successful builds
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh run list --repo ${{ github.repository }} --workflow ios-build --branch ios --status success --limit 3 --json databaseId,createdAt
+          NEW=$(gh run list --repo ${{ github.repository }} --workflow ios-build --branch ios --status success --limit 2 --json databaseId -q '.[0].databaseId')
+          OLD=$(gh run list --repo ${{ github.repository }} --workflow ios-build --branch ios --status success --limit 2 --json databaseId -q '.[1].databaseId')
+          echo "new=$NEW old=$OLD"
+          gh run download $NEW --repo ${{ github.repository }} -n SonicMania-iOS8 -D newapp
+          gh run download $OLD --repo ${{ github.repository }} -n SonicMania-iOS8 -D oldapp
+          unzip -q newapp/SonicMania_iOS8.ipa -d newx
+          unzip -q oldapp/SonicMania_iOS8.ipa -d oldx
+          grep -A1 "CFBundleShortVersionString" newx/Payload/RSDKv5U.app/Info.plist | head -2
+          grep -A1 "CFBundleShortVersionString" oldx/Payload/RSDKv5U.app/Info.plist | head -2
+      - name: SYMCHECK what the new build needs
+        run: |
+          git clone --depth=1 https://github.com/theos/sdks
+          NM=/usr/lib/llvm-18/bin/llvm-nm
+          $NM -u newx/Payload/RSDKv5U.app/RSDKv5U | awk '{print $NF}' | sort -u > new.txt
+          $NM -u oldx/Payload/RSDKv5U.app/RSDKv5U | awk '{print $NF}' | sort -u > old.txt
+          wc -l new.txt old.txt
+          python3 - <<'PY'
+          import re, glob
+          known = set()
+          for f in glob.glob("sdks/iPhoneOS10.3.sdk/**/*.tbd", recursive=True):
+              for t in re.findall(r"[^\s,\[\]']+", open(f, errors="ignore").read()):
+                  known.add(t)
+                  for p in ("_OBJC_CLASS_$_", "_OBJC_METACLASS_$_", "_OBJC_EHTYPE_$_"):
+                      known.add(p + t)
+          new = set(l.strip() for l in open("new.txt") if l.strip())
+          old = set(l.strip() for l in open("old.txt") if l.strip())
+          added = sorted(new - old)
+          print("symbols only the new build needs:", len(added))
+          missing = [s for s in added if s not in known]
+          print("of those, NOT found in any SDK library:", len(missing))
+          for s in missing[:120]:
+              print("  MISSING", s)
+          cpp = [s for s in added if s in known and re.search(r"ZNSt|ZNKSt|ZSt|__cxa|__gxx|_ZT|libcpp", s)]
+          print("C++ runtime symbols the new build added (found in SDK):", len(cpp))
+          for s in cpp[:60]:
+              print("  cpp", s)
+          PY
