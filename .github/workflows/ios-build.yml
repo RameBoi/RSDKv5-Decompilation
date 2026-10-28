@@ -30,6 +30,8 @@ jobs:
         run: |
           python3 tools/mod_patch.py
           printf '\nset_source_files_properties(RSDKv5/RSDK/Core/ModAPI.cpp PROPERTIES COMPILE_FLAGS "-fexceptions -frtti")\n' >> Game/dependencies/RSDKv5/platforms/iOS.cmake
+          printf '#include <sstream>\ntemplate class std::basic_stringbuf<char>;\ntemplate class std::basic_istringstream<char>;\n' > Game/dependencies/RSDKv5/ios_cxx_stubs.cpp
+          printf '\ntarget_sources(RetroEngine PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/ios_cxx_stubs.cpp)\n' >> Game/dependencies/RSDKv5/platforms/iOS.cmake
       - name: IOSBUILD configure
         run: |
           mkdir -p stubs
@@ -73,12 +75,15 @@ jobs:
           python3 - <<'PY' || true
           import re, glob
           known = set()
-          for f in glob.glob("sdks/iPhoneOS10.3.sdk/usr/lib/**/*.tbd", recursive=True):
-              known.update(re.findall(r"[^\s,\[\]']+", open(f, errors="ignore").read()))
+          for f in glob.glob("sdks/iPhoneOS10.3.sdk/**/*.tbd", recursive=True):
+              for t in re.findall(r"[^\s,\[\]']+", open(f, errors="ignore").read()):
+                  known.add(t)
+                  for p in ("_OBJC_CLASS_$_", "_OBJC_METACLASS_$_", "_OBJC_EHTYPE_$_"):
+                      known.add(p + t)
           missing = [l.strip() for l in open("undef.txt") if l.strip() and l.strip() not in known]
           print("undefined symbols not found in any SDK library:", len(missing))
-          for m in missing[:60]:
-              print(m)
+          for m in missing[:80]:
+              print("  MISSING", m)
           PY
       - name: IOSBUILD package
         run: |
@@ -99,8 +104,8 @@ jobs:
               <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
               <key>CFBundleName</key><string>Sonic Mania</string>
               <key>CFBundlePackageType</key><string>APPL</string>
-              <key>CFBundleShortVersionString</key><string>0.8</string>
-              <key>CFBundleVersion</key><string>8</string>
+              <key>CFBundleShortVersionString</key><string>0.9</string>
+              <key>CFBundleVersion</key><string>9</string>
               <key>LSRequiresIPhoneOS</key><true/>
               <key>MinimumOSVersion</key><string>8.0</string>
               <key>UIDeviceFamily</key><array><integer>1</integer><integer>2</integer></array>
@@ -117,7 +122,7 @@ jobs:
           cat > deb/DEBIAN/control <<'EOF'
           Package: com.rameboi.sonicmania
           Name: Sonic Mania
-          Version: 0.8
+          Version: 0.9
           Architecture: iphoneos-arm
           Description: Sonic Mania (RSDKv5) port for iOS 8
           Maintainer: RameBoi
